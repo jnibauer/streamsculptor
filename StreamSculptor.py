@@ -780,6 +780,15 @@ def eval_dense_stream(t_eval=None, dense_stream=None):
     return output[:,0,:], output[:,1,:] #lead, trail
 
 def fill_in_collision_times(ts_stepto_base=None,tcollision=None,dt0_collision=None,collision_twindow=None,t0=None,t1=None):
+    """
+    Function outputs a ts_stepto_array accounting for a user-defined time-step during the collision.
+    ts_stepto_base: timesteps in base potential. Outside of the collision window this will remain unchanged.
+    tcollision: array of collision times
+    dt0_collision: timestep in collision window
+    collison_twindow: symmetric buffer around tcollision. At tcollision +/- collision_twindow, dt0_collision is the timestep
+    t0: starting integration time
+    t1: terminating time
+    """
     if t0 is None:
             t0 = ts_stepto_base.min()
     if t1 is None:

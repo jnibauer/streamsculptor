@@ -945,15 +945,3 @@ def gen_stream_scan_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=Non
     return lead_arm, trail_arm
 
     
-
-    
-
-
-    
-    
-
-
-
-    
-
-

@@ -124,7 +124,7 @@ class Potential:
     #################### Orbit integrator ###########################
 
     @partial(jax.jit,static_argnums=((0,3,4,5,6,7,8,9,16,17,18,19)))
-    def integrate_orbit(self,w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.05,dtmax=None,max_steps=10_000, t0=None, t1=None,dt0=0.5,pcoeff=0.4, icoeff=0.3,dcoeff=0, factormin=.2,factormax=10.0,safety=0.9,steps=False):
+    def integrate_orbit(self,w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,dt0=0.5,pcoeff=0.4, icoeff=0.3,dcoeff=0, factormin=.2,factormax=10.0,safety=0.9,steps=False):
         """
         Integrate orbit associated with potential function.
         w0: length 6 array [x,y,z,vx,vy,vz]
@@ -136,7 +136,7 @@ class Potential:
         max_steps: maximum number of allowed timesteps
         step_controller: 0 for PID (adaptive), 1 for constant timestep (must then specify dt0)
         """
-    
+        
         dt0_sign = jnp.sign(ts.max() - ts.min()) if t0 is None else jnp.sign(t1 - t0)
         dt0 = dt0*dt0_sign
 
@@ -725,6 +725,7 @@ class Potential:
         pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts, prog_w0, Msat, seed_num, **kwargs)
         orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts, dense=True, **kwargs)
         orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
+        @jax.jit
         def scan_fun(carry, particle_idx):
             i, pos_close_curr, pos_far_curr, vel_close_curr, vel_far_curr = carry
             curr_particle_w0_close = jnp.hstack([pos_close_curr,vel_close_curr])
@@ -767,8 +768,7 @@ class Potential:
             return w_particle
         particle_ids = jnp.arange(len(pos_close_arr)-1)
         
-        return jax.vmap(single_particle_integrate,in_axes=(0,0,0,0,0,))(particle_ids,pos_close_arr, pos_far_arr[:-1], 
-        vel_close_arr[:-1], vel_far_arr[:-1])
+        return jax.vmap(single_particle_integrate,in_axes=(0,0,0,0,0,))(particle_ids,pos_close_arr[:-1], pos_far_arr[:-1],vel_close_arr[:-1], vel_far_arr[:-1])
     
 
 

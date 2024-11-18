@@ -550,14 +550,14 @@ class Potential:
         return pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr
     
             
-    @partial(jax.jit,static_argnums=(0,))
-    def gen_stream_scan(self, ts=None, prog_w0=None, Msat=None, seed_num=None, **kwargs):
+    @partial(jax.jit,static_argnums=(0,5))
+    def gen_stream_scan(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'), **kwargs):
         """
         Generate stellar stream by scanning over the release model/integration. Better for CPU usage.
         pass in kwargs for the orbit integrator
         """
         pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts, prog_w0, Msat, seed_num, **kwargs)
-        orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts, **kwargs).ys[-1]
+        orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts,solver=solver,**kwargs).ys[-1]
         orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
         @jax.jit
         def scan_fun(carry, particle_idx):
@@ -715,15 +715,15 @@ class Potential:
 
     
   
-    @partial(jax.jit,static_argnums=(0,))
-    def gen_stream_scan_dense(self, ts=None, prog_w0=None, Msat=None, seed_num=None, **kwargs):
+    @partial(jax.jit,static_argnums=(0,5))
+    def gen_stream_scan_dense(self, ts=None, prog_w0=None, Msat=None, seed_num=None,solver=diffrax.Dopri5(scan_kind='bounded'), **kwargs):
         """
         Generate dense stellar stream model by scanning over the release model/integration. Better for CPU usage.
         pass in kwargs for the orbit integrator
         Dense means we can access the stream model at anytime from ts.min() to ts.max() via an interpolation of orbits
         """
         pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts, prog_w0, Msat, seed_num, **kwargs)
-        orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts, dense=True, **kwargs)
+        orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts, dense=True, solver=solver, **kwargs)
         orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
         @jax.jit
         def scan_fun(carry, particle_idx):
@@ -746,14 +746,14 @@ class Potential:
         return lead_arm_trail_arm[0]
 
 
-    @partial(jax.jit,static_argnums=((0,)))
-    def gen_stream_vmapped_dense(self, ts=None, prog_w0=None, Msat=None, seed_num=None, **kwargs):
+    @partial(jax.jit,static_argnums=((0,5)))
+    def gen_stream_vmapped_dense(self, ts=None, prog_w0=None, Msat=None, seed_num=None,solver=diffrax.Dopri5(scan_kind='bounded'), **kwargs):
         """
         Generate dense stellar stream by vmapping over the release model/integration. Better for GPU usage.
         Dense means we can access the stream model at anytime from ts.min() to ts.max() via an interpolation of orbits
         """
         pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts, prog_w0, Msat, seed_num, **kwargs)
-        orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts, dense=True, **kwargs)
+        orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts, dense=True, solver=solver, **kwargs)
         orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
         @jax.jit
         def single_particle_integrate(particle_number,pos_close_curr,pos_far_curr,vel_close_curr,vel_far_curr):

@@ -1,5 +1,7 @@
-StreamSculptor: perturbative and non-perturbative stream models implemented in Jax
+StreamSculptor: perturbative and non-perturbative stream models implemented in Jax.
+
 Supports CPU and GPU architectures, automatic differentiation, custom time-dependent potentials.
+
 Auxillary ODEs can be computed along trajectories using the fields module.
 
 

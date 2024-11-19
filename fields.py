@@ -31,8 +31,8 @@ term function.
 """
 
 
-@partial(jax.jit,static_argnums=((3,4,5)))
-def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, rtol=1e-7, atol=1e-7, dtmin=0.05,max_steps=1_000):
+@partial(jax.jit,static_argnums=((2,3,4,)))
+def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, rtol=1e-7, atol=1e-7, dtmin=0.05,max_steps=1_000,jump_ts=None):
     """
     Integrate field associated with potential function.
     w0: length 6 array [x,y,z,vx,vy,vz]
@@ -50,7 +50,7 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
     rtol: float = rtol  
     atol: float = atol  
     
-    stepsize_controller = PIDController(rtol=rtol, atol=atol, dtmin=dtmin,dtmax=None,force_dtmin=True,)
+    stepsize_controller = PIDController(rtol=rtol, atol=atol, dtmin=dtmin,dtmax=None,force_dtmin=True,jump_ts=jump_ts)
     max_steps: int = max_steps
     
 

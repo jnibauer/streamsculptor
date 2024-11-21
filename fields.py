@@ -31,7 +31,7 @@ term function.
 """
 
 
-@partial(jax.jit,static_argnums=((2,3,4,)))
+@partial(jax.jit,static_argnums=((2,3,4)))
 def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, rtol=1e-7, atol=1e-7, dtmin=0.05,max_steps=1_000,jump_ts=None):
     """
     Integrate field associated with potential function.
@@ -57,8 +57,8 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
     solution = diffeqsolve(
         terms=term,
         solver=solver,
-        t0=ts.min(),
-        t1=ts.max(),
+        t0= ts.min(),
+        t1= ts.max(),
         y0=w0,
         dt0=None,
         saveat=saveat,

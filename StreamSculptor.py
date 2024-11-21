@@ -471,7 +471,7 @@ class Potential:
     ################### Stream Model ######################
     
     @partial(jax.jit,static_argnums=(0,))
-    def release_model(self, x, v, Msat,i, t, seed_num):
+    def release_model(self, x, v, Msat, i, t, seed_num):
         key_master = jax.random.PRNGKey(seed_num)
         random_ints = jax.random.randint(key=key_master,shape=(5,),minval=0,maxval=1000)
 
@@ -943,5 +943,7 @@ def gen_stream_scan_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=Non
     lead_arm, trail_arm = all_states
     
     return lead_arm, trail_arm
+
+
 
     

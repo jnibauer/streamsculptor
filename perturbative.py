@@ -32,6 +32,7 @@ class GenerateMassRadiusPerturbation(Potential):
     def __init__(self, potential_base, potential_perturbation, potential_structural, BaseStreamModel=None, units=None, **kwargs):
         super().__init__(units,{'potential_base':potential_base, 'potential_perturbation':potential_perturbation, 'potential_structural':potential_structural, 'BaseStreamModel':BaseStreamModel})
         self.gradient = None
+        self.potential_base = potential_base
         self.gradientPotentialBase = potential_base.gradient
         self.gradientPotentialPerturbation = potential_perturbation.gradient
         self.gradientPotentialStructural = potential_structural.gradient
@@ -57,8 +58,15 @@ class GenerateMassRadiusPerturbation(Potential):
             
         
     @partial(jax.jit,static_argnums=(0,))
-    def compute_base_stream(self,):
-        raise NotImplementedError
+    def compute_base_stream(self,cpu=True):
+
+        def cpu_func():
+            return self.potential_base.gen_stream_scan(ts=self.base_stream.ts, prog_w0=self.base_stream.prog_w0, Msat=self.base_stream.Msat, seed_num=self.base_stream.seednum, solver=self.base_stream.solver)
+        def gpu_func():
+            return self.potential_base.gen_stream_vmapped(ts=self.base_stream.ts, prog_w0=self.base_stream.prog_w0, Msat=self.base_stream.Msat, seed_num=self.base_stream.seednum, solver=self.base_stream.solver)
+
+        lead, trail = jax.lax.cond(cpu, cpu_func, gpu_func)
+        return lead, trail
 
     @partial(jax.jit,static_argnums=(0,))
     def compute_perturbation(self,):

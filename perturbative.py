@@ -54,7 +54,11 @@ class GenerateMassRadiusPerturbation(Potential):
             # to the Diffrax solver to handle the discontinuity.
             window = self.potential_perturbation.t_window
             self.jump_ts = jnp.hstack([self.potential_perturbation.subhalo_t0 - window, self.potential_perturbation.subhalo_t0 + window])
-            self.prog_fieldICs = integrate_field(w0=self.field_w0,ts=BaseStreamModel.ts,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts,**kwargs)
+            # Need to integrate backwards in time. BaseStreamModel.ts is in increasing time order, from past to present day [past, ..., observation time]
+            flipped_times = jnp.flip(BaseStreamModel.ts)
+            prog_fieldICs = integrate_field(w0=self.field_w0,ts=flipped_times,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts, backwards_int=True, **kwargs)
+            # Flip back to original time order, since we will integrate from [past, ..., observation time]
+            self.prog_fieldICs = jnp.flipud(prog_fieldICs.ys[1])
             self.perturbation_ICs_lead, self.perturbation_ICs_trail = self.compute_perturbation_ICs() # N_lead/trail x N_sh x 12
 
             self.base_realspace_ICs_lead = jnp.hstack([self.base_stream.streamICs[0], self.base_stream.streamICs[2]]) # N_lead x 6
@@ -81,11 +85,11 @@ class GenerateMassRadiusPerturbation(Potential):
         """
         Compute the initial conditions for the perturbation vector field.
         """
-        lead_pert_ICs_deps = jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC[:,0,:,:],self.prog_fieldICs.ys[1][:,:,:6])
-        trail_pert_ICs_deps = jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC[:,1,:,:],self.prog_fieldICs.ys[1][:,:,:6])
+        lead_pert_ICs_deps = jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC[:,0,:,:],self.prog_fieldICs[:,:,:6])
+        trail_pert_ICs_deps = jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC[:,1,:,:],self.prog_fieldICs[:,:,:6])
 
-        lead_pert_ICs_depsdr =  jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC[:,0,:,:],self.prog_fieldICs.ys[1][:,:,6:])
-        trail_pert_ICs_depsdr = jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC[:,1,:,:],self.prog_fieldICs.ys[1][:,:,6:])
+        lead_pert_ICs_depsdr =  jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC[:,0,:,:],self.prog_fieldICs[:,:,6:])
+        trail_pert_ICs_depsdr = jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC[:,1,:,:],self.prog_fieldICs[:,:,6:])
 
         lead_deriv_ICs = jnp.dstack([lead_pert_ICs_deps,lead_pert_ICs_depsdr])
         trail_deriv_ICs = jnp.dstack([trail_pert_ICs_deps,trail_pert_ICs_depsdr])
@@ -154,7 +158,7 @@ class BaseStreamModel(Potential):
     Zeroth order quantities are precomputed here, excluding the trajectory of the stream particles.
     potiential_base: potential function for the base potential, in H_base
     prog_w0: initial conditions of the progenitor
-    ts: array of stripping times
+    ts: array of stripping times. ts[-1] is the observation time.
     Msat: mass of the satellite
     seednum: seed number for the random number generator
     """

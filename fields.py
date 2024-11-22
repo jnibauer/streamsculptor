@@ -32,7 +32,7 @@ term function.
 
 
 @partial(jax.jit,static_argnums=((2,3,4)))
-def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, rtol=1e-7, atol=1e-7, dtmin=0.05,max_steps=1_000,jump_ts=None):
+def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, rtol=1e-7, atol=1e-7, dtmin=0.05,max_steps=1_000,jump_ts=None, backwards_int=False):
     """
     Integrate field associated with potential function.
     w0: length 6 array [x,y,z,vx,vy,vz]
@@ -52,13 +52,29 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
     
     stepsize_controller = PIDController(rtol=rtol, atol=atol, dtmin=dtmin,dtmax=None,force_dtmin=True,jump_ts=jump_ts)
     max_steps: int = max_steps
+
+    def false_func():
+        """
+        Integrating forward in time
+        """
+        t0 = ts.min()
+        t1 = ts.max()
+        return t0, t1
+    def true_func():
+        """
+        Integrating backwards in time
+        """
+        t0 = ts.max()
+        t1 = ts.min()
+        return t0, t1
+    t0, t1 = jax.lax.cond(backwards_int, true_func, false_func)
     
 
     solution = diffeqsolve(
         terms=term,
         solver=solver,
-        t0= ts.min(),
-        t1= ts.max(),
+        t0= t0,
+        t1= t1,
         y0=w0,
         dt0=None,
         saveat=saveat,

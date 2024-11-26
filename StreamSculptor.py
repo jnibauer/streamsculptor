@@ -471,7 +471,7 @@ class Potential:
     ################### Stream Model ######################
     
     @partial(jax.jit,static_argnums=(0,))
-    def release_model(self, x, v, Msat, i, t, seed_num):
+    def release_model(self, x=None, v=None, Msat=None, i=None, t=None, seed_num=None, kr_bar=2.0, kvphi_bar=0.3, kz_bar=0.0, kvz_bar=0.0, sigma_kr=0.5, sigma_kvphi=0.5, sigma_kz=0.5, sigma_kvz=0.5):
         key_master = jax.random.PRNGKey(seed_num)
         random_ints = jax.random.randint(key=key_master,shape=(5,),minval=0,maxval=1000)
 
@@ -504,16 +504,16 @@ class Potential:
         vt_sat = jnp.sum(v*phi_hat)
         
         
-        kr_bar = 2.0
-        kvphi_bar = 0.3
+        ##kr_bar = 2.0
+        ##kvphi_bar = 0.3
         
-        kz_bar = 0.0
-        kvz_bar = 0.0
+        ##kz_bar = 0.0
+        ##kvz_bar = 0.0
         
-        sigma_kr = 0.5
-        sigma_kvphi = 0.5
-        sigma_kz = 0.5
-        sigma_kvz = 0.5
+        ##sigma_kr = 0.5
+        ##sigma_kvphi = 0.5
+        ##sigma_kz = 0.5
+        ##sigma_kvz = 0.5
         
         kr_samp =  kr_bar + jax.random.normal(keya,shape=(1,))*sigma_kr
         kvphi_samp = kr_samp*(kvphi_bar  + jax.random.normal(keyb,shape=(1,))*sigma_kvphi)
@@ -543,7 +543,7 @@ class Potential:
 
         def scan_fun(carry, t):
             i, pos_close, pos_far, vel_close, vel_far = carry
-            pos_close_new, pos_far_new, vel_close_new, vel_far_new = self.release_model(ws_jax[i,:3], ws_jax[i,3:], Msat[i], i, t, seed_num)
+            pos_close_new, pos_far_new, vel_close_new, vel_far_new = self.release_model(x=ws_jax[i,:3], v=ws_jax[i,3:], Msat=Msat[i], i=i, t=t, seed_num=seed_num)
             return [i+1, pos_close_new, pos_far_new, vel_close_new, vel_far_new], [pos_close_new, pos_far_new, vel_close_new, vel_far_new]
             
             

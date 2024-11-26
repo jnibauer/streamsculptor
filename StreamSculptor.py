@@ -471,7 +471,16 @@ class Potential:
     ################### Stream Model ######################
     
     @partial(jax.jit,static_argnums=(0,))
-    def release_model(self, x=None, v=None, Msat=None, i=None, t=None, seed_num=None, kr_bar=2.0, kvphi_bar=0.3, kz_bar=0.0, kvz_bar=0.0, sigma_kr=0.5, sigma_kvphi=0.5, sigma_kz=0.5, sigma_kvz=0.5):
+    def release_model(self, x=None, v=None, Msat=None, i=None, t=None, seed_num=None, kval_arr = 1.0):
+        # if kval_arr is a scalar, then we assume the default values of kvals
+        pred = jnp.isscalar(kval_arr)
+        def true_func():
+            return jnp.array([2.0, 0.3, 0.0, 0.0, 0.5, 0.5, 0.5, 0.5])
+        def false_func():
+            return jnp.ones(8)*kval_arr
+        kval_arr = jax.lax.cond(pred, true_func, false_func)
+        kr_bar, kvphi_bar, kz_bar, kvz_bar, sigma_kr, sigma_kvphi, sigma_kz, sigma_kvz = kval_arr
+        #kr_bar=2.0, kvphi_bar=0.3, kz_bar=0.0, kvz_bar=0.0, sigma_kr=0.5, sigma_kvphi=0.5, sigma_kz=0.5, sigma_kvz=0.5):
         key_master = jax.random.PRNGKey(seed_num)
         random_ints = jax.random.randint(key=key_master,shape=(5,),minval=0,maxval=1000)
 
@@ -535,7 +544,7 @@ class Potential:
         return pos_lead, pos_trail, v_lead, v_trail
     
     @partial(jax.jit,static_argnums=(0,5))
-    def gen_stream_ics(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'),**kwargs):
+    def gen_stream_ics(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'),kval_arr=1.0, **kwargs):
         ws_jax = self.integrate_orbit(w0=prog_w0,ts=ts,solver=solver, **kwargs).ys
         
       
@@ -543,7 +552,7 @@ class Potential:
 
         def scan_fun(carry, t):
             i, pos_close, pos_far, vel_close, vel_far = carry
-            pos_close_new, pos_far_new, vel_close_new, vel_far_new = self.release_model(x=ws_jax[i,:3], v=ws_jax[i,3:], Msat=Msat[i], i=i, t=t, seed_num=seed_num)
+            pos_close_new, pos_far_new, vel_close_new, vel_far_new = self.release_model(x=ws_jax[i,:3], v=ws_jax[i,3:], Msat=Msat[i], i=i, t=t, seed_num=seed_num, kval_arr=kval_arr)
             return [i+1, pos_close_new, pos_far_new, vel_close_new, vel_far_new], [pos_close_new, pos_far_new, vel_close_new, vel_far_new]
             
             
@@ -554,12 +563,12 @@ class Potential:
     
             
     @partial(jax.jit,static_argnums=(0,5))
-    def gen_stream_scan(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'), **kwargs):
+    def gen_stream_scan(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'), kval_arr=1.0, **kwargs):
         """
         Generate stellar stream by scanning over the release model/integration. Better for CPU usage.
         pass in kwargs for the orbit integrator
         """
-        pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts, prog_w0, Msat, seed_num, **kwargs)
+        pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, kval_arr=kval_arr, **kwargs)
         orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts,solver=solver,**kwargs).ys[-1]
         orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
         @jax.jit
@@ -584,11 +593,11 @@ class Potential:
         return lead_arm, trail_arm
     
     @partial(jax.jit,static_argnums=((0,5)))
-    def gen_stream_vmapped(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded') ,**kwargs):
+    def gen_stream_vmapped(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded') , kval_arr=1.0, **kwargs):
         """
         Generate stellar stream by vmapping over the release model/integration. Better for GPU usage.
         """
-        pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver, **kwargs)
+        pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver, kval_arr=kval_arr, **kwargs)
         orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts, solver=solver, **kwargs).ys[-1]
         orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
         @jax.jit
@@ -719,13 +728,13 @@ class Potential:
     
   
     @partial(jax.jit,static_argnums=(0,5))
-    def gen_stream_scan_dense(self, ts=None, prog_w0=None, Msat=None, seed_num=None,solver=diffrax.Dopri5(scan_kind='bounded'), **kwargs):
+    def gen_stream_scan_dense(self, ts=None, prog_w0=None, Msat=None, seed_num=None,solver=diffrax.Dopri5(scan_kind='bounded'), kval_arr=1.0, **kwargs):
         """
         Generate dense stellar stream model by scanning over the release model/integration. Better for CPU usage.
         pass in kwargs for the orbit integrator
         Dense means we can access the stream model at anytime from ts.min() to ts.max() via an interpolation of orbits
         """
-        pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts, prog_w0, Msat, seed_num, **kwargs)
+        pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver, kval_arr=kval_arr, **kwargs)
         orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts, dense=True, solver=solver, **kwargs)
         orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
         @jax.jit
@@ -750,12 +759,12 @@ class Potential:
 
 
     @partial(jax.jit,static_argnums=((0,5)))
-    def gen_stream_vmapped_dense(self, ts=None, prog_w0=None, Msat=None, seed_num=None,solver=diffrax.Dopri5(scan_kind='bounded'), **kwargs):
+    def gen_stream_vmapped_dense(self, ts=None, prog_w0=None, Msat=None, seed_num=None,solver=diffrax.Dopri5(scan_kind='bounded'), kval_arr=1.0, **kwargs):
         """
         Generate dense stellar stream by vmapping over the release model/integration. Better for GPU usage.
         Dense means we can access the stream model at anytime from ts.min() to ts.max() via an interpolation of orbits
         """
-        pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts, prog_w0, Msat, seed_num, **kwargs)
+        pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver, kval_arr=kval_arr, **kwargs)
         orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts, dense=True, solver=solver, **kwargs)
         orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
         @jax.jit
@@ -857,7 +866,7 @@ def get_particle_stepto(ts_stepto, stripping_time, final_time):
 import potential
 
 @partial(jax.jit,static_argnums=(0,1,6))
-def gen_stream_ics_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'),**kwargs):
+def gen_stream_ics_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'),kval_arr=1.0,**kwargs):
     """
     Generate stream initial conditions for the case of direct impacts or near misses with massive subhalos.
     This function exists purely for numerical reasons: when computing the particle spray release function,
@@ -876,7 +885,7 @@ def gen_stream_ics_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msa
     def scan_fun(carry, t):
         # compute release model derivs (tidal tensor along prog's orbit) in base potential only, to avoid numerical errors with perturbation flyby
         i, pos_close, pos_far, vel_close, vel_far = carry
-        pos_close_new, pos_far_new, vel_close_new, vel_far_new = pot_base.release_model(ws_jax[i,:3], ws_jax[i,3:], Msat[i],i, t, seed_num)
+        pos_close_new, pos_far_new, vel_close_new, vel_far_new = pot_base.release_model(x=ws_jax[i,:3], v=ws_jax[i,3:], Msat=Msat[i],i=i, t=t, seed_num=seed_num, kval_arr=kval_arr)
         return [i+1, pos_close_new, pos_far_new, vel_close_new, vel_far_new], [pos_close_new, pos_far_new, vel_close_new, vel_far_new]
         
         
@@ -886,11 +895,11 @@ def gen_stream_ics_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msa
     return pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr
 
 @partial(jax.jit,static_argnums=((0,1,6)))
-def gen_stream_vmapped_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded') ,**kwargs):
+def gen_stream_vmapped_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'), kval_arr=1.0, **kwargs):
     """
     Generate perturbed stream with vmap. Better for GPU usage.
     """
-    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = gen_stream_ics_pert(pot_base=pot_base, pot_pert=pot_pert, ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver, **kwargs)
+    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = gen_stream_ics_pert(pot_base=pot_base, pot_pert=pot_pert, ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver,kval_arr=kval_arr,**kwargs)
     pot_total_lst = [pot_base, pot_pert]
     pot_total = potential.Potential_Combine(potential_list=pot_total_lst, units=usys)
     orb_integrator = lambda w0, ts: pot_total.integrate_orbit(w0=w0, ts=ts, solver=solver, **kwargs).ys[-1]
@@ -916,11 +925,11 @@ def gen_stream_vmapped_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=
 
 
 @partial(jax.jit,static_argnums=((0,1,6)))
-def gen_stream_scan_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded') ,**kwargs):
+def gen_stream_scan_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded') ,kval_arr=1.0, **kwargs):
     """
     Generate perturbed stream with scan. Better for CPU usage.
     """
-    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = gen_stream_ics_pert(pot_base=pot_base, pot_pert=pot_pert, ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver, **kwargs)
+    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = gen_stream_ics_pert(pot_base=pot_base, pot_pert=pot_pert, ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver,kval_arr=kval_arr, **kwargs)
     pot_total_lst = [pot_base, pot_pert]
     pot_total = potential.Potential_Combine(potential_list=pot_total_lst, units=usys)
     orb_integrator = lambda w0, ts: pot_total.integrate_orbit(w0=w0, ts=ts, solver=solver, **kwargs).ys[-1]

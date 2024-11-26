@@ -538,9 +538,12 @@ class Potential:
     def gen_stream_ics(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'),**kwargs):
         ws_jax = self.integrate_orbit(w0=prog_w0,ts=ts,solver=solver, **kwargs).ys
         
+      
+        Msat = Msat*jnp.ones(len(ts))
+
         def scan_fun(carry, t):
             i, pos_close, pos_far, vel_close, vel_far = carry
-            pos_close_new, pos_far_new, vel_close_new, vel_far_new = self.release_model(ws_jax[i,:3], ws_jax[i,3:], Msat,i, t, seed_num)
+            pos_close_new, pos_far_new, vel_close_new, vel_far_new = self.release_model(ws_jax[i,:3], ws_jax[i,3:], Msat[i], i, t, seed_num)
             return [i+1, pos_close_new, pos_far_new, vel_close_new, vel_far_new], [pos_close_new, pos_far_new, vel_close_new, vel_far_new]
             
             
@@ -868,11 +871,12 @@ def gen_stream_ics_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msa
     pot_total = potential.Potential_Combine(potential_list=pot_total_lst, units=usys)
     # Integrate progenitor in full potential, base + perturbation
     ws_jax = pot_total.integrate_orbit(w0=prog_w0,ts=ts,solver=solver, **kwargs).ys
+    Msat = Msat*jnp.ones(len(ts))
     
     def scan_fun(carry, t):
         # compute release model derivs (tidal tensor along prog's orbit) in base potential only, to avoid numerical errors with perturbation flyby
         i, pos_close, pos_far, vel_close, vel_far = carry
-        pos_close_new, pos_far_new, vel_close_new, vel_far_new = pot_base.release_model(ws_jax[i,:3], ws_jax[i,3:], Msat,i, t, seed_num)
+        pos_close_new, pos_far_new, vel_close_new, vel_far_new = pot_base.release_model(ws_jax[i,:3], ws_jax[i,3:], Msat[i],i, t, seed_num)
         return [i+1, pos_close_new, pos_far_new, vel_close_new, vel_far_new], [pos_close_new, pos_far_new, vel_close_new, vel_far_new]
         
         

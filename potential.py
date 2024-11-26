@@ -14,6 +14,7 @@ from jax_cosmo.scipy.interpolate import InterpolatedUnivariateSpline
 from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTerminatingEvent, DirectAdjoint, RecursiveCheckpointAdjoint, ConstantStepSize, Euler, StepTo
 import diffrax
 import equinox as eqx
+from jax.scipy import special
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
 
 from StreamSculptor import Potential
@@ -62,7 +63,7 @@ class NFWPotential(Potential):
     @partial(jax.jit,static_argnums=(0,))
     def potential(self,xyz,t):
         v_h2 = -self._G*self.m/self.r_s
-        m = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 + .001)/self.r_s ##added softening! used to be 0.01
+        m = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 )/self.r_s ##removed softening! used to be .001 after xyz[2]**2
         return v_h2*jnp.log(1.0+ m) / m
 
 class Isochrone(Potential):
@@ -146,6 +147,39 @@ class DehnenBarPotential(Potential):
         prefacs = self.alpha*( (self.v0**2)/3 )*( (self.R0 / self.Rb)**3 )
         pot_eval = prefacs*((R**2/r**2))*U_eval*jnp.cos(2*(phi - self.phib - self.Omega*t))
         return pot_eval
+
+class PowerLawCutoffPotential(Potential):
+    """
+    Galpy potential, following the implementation from gala
+    galpy source: https://github.com/jobovy/galpy/blob/main/galpy/potential/PowerSphericalPotentialwCutoff.py
+    gala source: https://github.com/adrn/gala/blob/main/gala/potential/potential/builtin/builtin_potentials.c
+
+    """
+    def __init__(self, m, alpha, r_c, units=None):
+        super().__init__(units, {'m':m,'alpha':alpha,'r_c':r_c})
+        self.gradient = self.gradient_func
+
+    @partial(jax.jit,static_argnums=(0,))
+    def potential(self,xyz,t):
+        r = jnp.sqrt(jnp.sum(xyz**2))
+        tmp_0 = (1/2.)*self.alpha
+        tmp_1 = -tmp_0
+        tmp_2 = tmp_1 + 1.5
+        tmp_3 = r**2
+        tmp_4 = tmp_3/self.r_c**2
+        tmp_5 = self._G*self.m
+        tmp_6 = tmp_5*special.gammainc(tmp_2,tmp_4)*special.gamma(tmp_2)/(jnp.sqrt(tmp_3)*special.gamma(tmp_1 + 2.5))
+        return tmp_0*tmp_6 - 3./2.0*tmp_6 + tmp_5*special.gammainc(tmp_1 + 1, tmp_4)*special.gamma(tmp_1 + 1)/(self.r_c*special.gamma(tmp_2))
+    
+    @partial(jax.jit,static_argnums=(0,))
+    def gradient_func(self, xyz, t):
+        r = jnp.sqrt(jnp.sum(xyz**2))
+        dPhi_dr = (self._G*self.m/(r**2) * 
+                    special.gammainc(0.5*(3-self.alpha), r*r/(self.r_c*self.r_c))    )
+        grad0 = dPhi_dr * xyz[0] / r
+        grad1 = dPhi_dr * xyz[1] / r
+        grad2 = dPhi_dr * xyz[2] / r
+        return jnp.array([grad0, grad1, grad2])
     
 class GalaMilkyWayPotential(Potential):
     def __init__(self,units=None):
@@ -171,6 +205,34 @@ class GalaMilkyWayPotential(Potential):
         pot_nucleus = HernquistPotential(m=self.m_nucleus, r_s=self.c_nucleus, units=self.units)
         pot_halo = NFWPotential(m=self.m_halo, r_s=self.r_s_halo, units=self.units)
         potential_list = [pot_disk,pot_bulge, pot_nucleus, pot_halo]
+        self.pot = Potential_Combine(potential_list=potential_list,units=self.units)
+
+    @partial(jax.jit,static_argnums=(0,))
+    def potential(self, xyz,t):
+        return self.pot.potential(xyz,t)
+
+class BovyMWPotential2014(Potential):
+    def __init__(self,units=None):
+        super().__init__(units,{'params':None})
+        #Disk: Miytamoto-nagai
+        self.m_disk = 6.82e10
+        self.a_disk = 3.0
+        self.b_disk = 0.28
+
+        #Bulge: HernquistPotential
+        self.m_bulge = 4.50e9
+        self.alpha_bulge = 1.80
+        self.r_c_bulge = 1.90
+
+
+        #Halo: NFWPotential
+        self.m_halo = 4.37e11
+        self.r_s_halo = 16.0
+
+        pot_disk = MiyamotoNagaiDisk(m=self.m_disk, a=self.a_disk, b=self.b_disk, units=self.units)
+        pot_bulge = PowerLawCutoffPotential(m=self.m_bulge, alpha=self.alpha_bulge, r_c=self.r_c_bulge, units=self.units)
+        pot_halo = NFWPotential(m=self.m_halo, r_s=self.r_s_halo, units=self.units)
+        potential_list = [pot_disk,pot_bulge,pot_halo]
         self.pot = Potential_Combine(potential_list=potential_list,units=self.units)
 
     @partial(jax.jit,static_argnums=(0,))

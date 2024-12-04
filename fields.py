@@ -55,14 +55,14 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
 
     def false_func():
         """
-        Integrating forward in time
+        Integrating forward in time: t1 > t0
         """
         t0 = ts.min()
         t1 = ts.max()
         return t0, t1
     def true_func():
         """
-        Integrating backwards in time
+        Integrating backwards in time: t1 < t0
         """
         t0 = ts.max()
         t1 = ts.min()
@@ -138,14 +138,14 @@ class MassRadiusPerturbation_OTF:
         # For the Hamiltonian considered, dp/deps is just the integrated acceleration. Relabling...
         d_qdot_d_eps = v1 
         # Next, injected acceleration: subhalo acceleration + matmul(tidal tensor, dq/deps)
-        d_pdot_d_eps = acceleration1 + jnp.einsum('ij,kj->ki',d2H_dq2,x1,optimize='optimal') #nSH x 3
+        d_pdot_d_eps = acceleration1 + jnp.einsum('ij,kj->ki',d2H_dq2,x1)#,optimize='optimal') #nSH x 3
         
         # Now handle radius deviations
         acceleration1_r = -self.pertgen.gradientPotentialStructural_per_SH(x0,t) # nSH x 3
         d_qalpha1dot_dtheta = dv1_dtheta
-        d_palpha1dot_dtheta = acceleration1_r + jnp.einsum('ij,kj->ki',d2H_dq2,dx1_dtheta,optimize='optimal')#jnp.matmul(d2H_dq2,dx1_dtheta)
+        d_palpha1dot_dtheta = acceleration1_r + jnp.einsum('ij,kj->ki',d2H_dq2,dx1_dtheta)#,optimize='optimal')#jnp.matmul(d2H_dq2,dx1_dtheta)
         
-        # Package the output
+        # Package the output: [6, Nsh x 12]
         return [jnp.hstack([v0,acceleration0]), 
                 jnp.hstack([d_qdot_d_eps,d_pdot_d_eps, d_qalpha1dot_dtheta, d_palpha1dot_dtheta])]
 

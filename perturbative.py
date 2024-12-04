@@ -48,16 +48,21 @@ class GenerateMassRadiusPerturbation(Potential):
             """
             self.base_stream = BaseStreamModel
             self.num_pert = self.potential_perturbation.subhalo_x0.shape[0]
-            self.field_w0 = [BaseStreamModel.prog_w0, jnp.zeros((self.num_pert, 12))]
+            ## Note: prog_w0 is the *intial condition*, that we must integrate forward from
+            ## .prog_loc_fwd[-1] is the final (observed) coordinate.
+            self.field_wobs = [BaseStreamModel.prog_loc_fwd[-1], jnp.zeros((self.num_pert, 12))]
             # Jump times are the times at which the perturbation is turned on and off
             # During these times the vector field is discontinuous. We pass this information
             # to the Diffrax solver to handle the discontinuity.
             window = self.potential_perturbation.t_window
-            self.jump_ts = jnp.hstack([self.potential_perturbation.subhalo_t0 - window, self.potential_perturbation.subhalo_t0 + window])
+            jump_ts = jnp.hstack([self.potential_perturbation.subhalo_t0 - window, self.potential_perturbation.subhalo_t0 + window])
+            self.jump_ts = jnp.unique(jnp.clip(jump_ts, BaseStreamModel.ts.min()+1.0, BaseStreamModel.ts.max()-1.0))
             # Need to integrate backwards in time. BaseStreamModel.ts is in increasing time order, from past to present day [past, ..., observation time]
             flipped_times = jnp.flip(BaseStreamModel.ts)
-            prog_fieldICs = integrate_field(w0=self.field_w0,ts=flipped_times,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts, backwards_int=True, **kwargs)
+            # jump_ts are in increasing time order, so we flip them as well. This is necessary for the backwards integration (diffrax requires this, otherwise orbit is wrong)
+            prog_fieldICs = integrate_field(w0=self.field_wobs,ts=flipped_times,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=jnp.flip(self.jump_ts), backwards_int=True, **kwargs)
             # Flip back to original time order, since we will integrate from [past, ..., observation time]
+            self.prog_base = prog_fieldICs### for testing, can delete
             self.prog_fieldICs = jnp.flipud(prog_fieldICs.ys[1])
             self.perturbation_ICs_lead, self.perturbation_ICs_trail = self.compute_perturbation_ICs() # N_lead/trail x N_sh x 12
 
@@ -111,9 +116,9 @@ class GenerateMassRadiusPerturbation(Potential):
                 lead_space_and_derivs = [lead_space_and_derivs.ys[0][-1,:], lead_space_and_derivs.ys[1][-1,:]]
                 trail_space_and_derivs = integrator(ICs_total_trail,ts_arr)
                 trail_space_and_derivs = [trail_space_and_derivs.ys[0][-1,:], trail_space_and_derivs.ys[1][-1,:]]
-                return [i+1, self.perturbation_ICs_lead[i+1], self.perturbation_ICs_lead[i+1]], [lead_space_and_derivs, trail_space_and_derivs]
+                return [i+1, self.perturbation_ICs_lead[i+1], self.perturbation_ICs_trail[i+1]], [lead_space_and_derivs, trail_space_and_derivs]
 
-            init_carry = [0, self.perturbation_ICs_lead[0], self.perturbation_ICs_lead[0]]
+            init_carry = [0, self.perturbation_ICs_lead[0], self.perturbation_ICs_trail[0]] #perturbation_ICs_lead
             particle_ids = self.base_stream.IDs[:-1]
             final_state, all_states = jax.lax.scan(scan_fun,init_carry,particle_ids)
             lead_and_derivs, trail_and_derivs = all_states
@@ -157,7 +162,7 @@ class BaseStreamModel(Potential):
     Class to define a stream model object, in the absence of linear perturbations.
     Zeroth order quantities are precomputed here, excluding the trajectory of the stream particles.
     potiential_base: potential function for the base potential, in H_base
-    prog_w0: initial conditions of the progenitor
+    prog_w0: initial conditions of the progenitor. This will be integrated _forwards_ in time.
     ts: array of stripping times. ts[-1] is the observation time.
     Msat: mass of the satellite
     seednum: seed number for the random number generator
@@ -176,8 +181,8 @@ class BaseStreamModel(Potential):
         self.streamICs = potential_base.gen_stream_ics(ts=self.ts, prog_w0=self.prog_w0, Msat=self.Msat, seed_num=self.seednum, solver=self.solver)
         self.IDs = jnp.arange(len(self.ts))
 
-        self.prog_back = potential_base.integrate_orbit(w0=self.prog_w0,ts=jnp.array([self.ts.max(), self.ts.min()]), t0=self.ts.max(), t1=self.ts.min(),solver=self.solver).ys[1]
-        self.prog_loc_fwd = potential_base.integrate_orbit(w0=self.prog_back,ts=self.ts, t0=self.ts.min(), t1=self.ts.max(),solver=self.solver).ys        
+        #self.prog_back = potential_base.integrate_orbit(w0=self.prog_w0,ts=jnp.array([self.ts.max(), self.ts.min()]), t0=self.ts.max(), t1=self.ts.min(),solver=self.solver).ys[1]
+        self.prog_loc_fwd = potential_base.integrate_orbit(w0=self.prog_w0,ts=self.ts, t0=self.ts.min(), t1=self.ts.max(),solver=self.solver).ys        
         self.dRel_dIC = self.release_func_jacobian()
 
     @partial(jax.jit,static_argnums=(0,))

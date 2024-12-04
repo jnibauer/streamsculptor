@@ -51,16 +51,10 @@ class GenerateMassRadiusPerturbation(Potential):
             ## Note: prog_w0 is the *intial condition*, that we must integrate forward from
             ## .prog_loc_fwd[-1] is the final (observed) coordinate.
             self.field_wobs = [BaseStreamModel.prog_loc_fwd[-1], jnp.zeros((self.num_pert, 12))]
-            # Jump times are the times at which the perturbation is turned on and off
-            # During these times the vector field is discontinuous. We pass this information
-            # to the Diffrax solver to handle the discontinuity.
-            window = self.potential_perturbation.t_window
-            jump_ts = jnp.hstack([self.potential_perturbation.subhalo_t0 - window, self.potential_perturbation.subhalo_t0 + window])
-            self.jump_ts = jnp.unique(jnp.clip(jump_ts, BaseStreamModel.ts.min()+1.0, BaseStreamModel.ts.max()-1.0))
+            self.jump_ts = None
             # Need to integrate backwards in time. BaseStreamModel.ts is in increasing time order, from past to present day [past, ..., observation time]
             flipped_times = jnp.flip(BaseStreamModel.ts)
-            # jump_ts are in increasing time order, so we flip them as well. This is necessary for the backwards integration (diffrax requires this, otherwise orbit is wrong)
-            prog_fieldICs = integrate_field(w0=self.field_wobs,ts=flipped_times,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=jnp.flip(self.jump_ts), backwards_int=True, **kwargs)
+            prog_fieldICs = integrate_field(w0=self.field_wobs,ts=flipped_times,field=fields.MassRadiusPerturbation_OTF(self), backwards_int=True, **kwargs)
             # Flip back to original time order, since we will integrate from [past, ..., observation time]
             self.prog_base = prog_fieldICs### for testing, can delete
             self.prog_fieldICs = jnp.flipud(prog_fieldICs.ys[1])
@@ -101,9 +95,9 @@ class GenerateMassRadiusPerturbation(Potential):
 
         return lead_deriv_ICs, trail_deriv_ICs # N_lead x N_sh x 12
 
-    @partial(jax.jit,static_argnums=(0,))
-    def compute_perturbation_OTF(self, cpu=True):
-        integrator = lambda w0, ts: integrate_field(w0=w0,ts=ts,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts)
+    @partial(jax.jit,static_argnums=(0,2))
+    def compute_perturbation_OTF(self, cpu=True, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, dtmax=None):
+        integrator = lambda w0, ts: integrate_field(w0=w0,ts=ts,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax)
         integrator = jax.jit(integrator)
         def cpu_func():
             @jax.jit
@@ -167,7 +161,7 @@ class BaseStreamModel(Potential):
     Msat: mass of the satellite
     seednum: seed number for the random number generator
     """
-    def __init__(self,  potential_base, prog_w0, ts, Msat, seednum, solver, units=None):
+    def __init__(self,  potential_base, prog_w0, ts, Msat, seednum, solver, units=None, **kwargs):
         super().__init__(units,{'potential_base':potential_base, 'prog_w0':prog_w0, 'ts':ts, 'Msat':Msat, 'seednum':seednum, 'solver':solver})
         self.potential_base = potential_base
         self.prog_w0 = prog_w0
@@ -178,11 +172,11 @@ class BaseStreamModel(Potential):
             self.solver = diffrax.Dopri5(scan_kind='bounded')
         else:
             self.solver = solver
-        self.streamICs = potential_base.gen_stream_ics(ts=self.ts, prog_w0=self.prog_w0, Msat=self.Msat, seed_num=self.seednum, solver=self.solver)
+        self.streamICs = potential_base.gen_stream_ics(ts=self.ts, prog_w0=self.prog_w0, Msat=self.Msat, seed_num=self.seednum, solver=self.solver, **kwargs)
         self.IDs = jnp.arange(len(self.ts))
 
         #self.prog_back = potential_base.integrate_orbit(w0=self.prog_w0,ts=jnp.array([self.ts.max(), self.ts.min()]), t0=self.ts.max(), t1=self.ts.min(),solver=self.solver).ys[1]
-        self.prog_loc_fwd = potential_base.integrate_orbit(w0=self.prog_w0,ts=self.ts, t0=self.ts.min(), t1=self.ts.max(),solver=self.solver).ys        
+        self.prog_loc_fwd = potential_base.integrate_orbit(w0=self.prog_w0,ts=self.ts, t0=self.ts.min(), t1=self.ts.max(),solver=self.solver, **kwargs).ys        
         self.dRel_dIC = self.release_func_jacobian()
 
     @partial(jax.jit,static_argnums=(0,))

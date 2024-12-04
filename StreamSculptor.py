@@ -124,7 +124,7 @@ class Potential:
     #################### Orbit integrator ###########################
 
     @partial(jax.jit,static_argnums=((0,3,4,5,6,7,8,9,16,17,18,19,)))
-    def integrate_orbit(self,w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,dt0=0.5,pcoeff=0.4, icoeff=0.3,dcoeff=0, factormin=.2,factormax=10.0,safety=0.9,steps=False,jump_ts=None):
+    def integrate_orbit(self,w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,dt0=0.5,pcoeff=0.4, icoeff=0.3,dcoeff=0, factormin=.2,factormax=10.0,safety=0.9,steps=False,jump_ts=None,):
         """
         Integrate orbit associated with potential function.
         w0: length 6 array [x,y,z,vx,vy,vz]

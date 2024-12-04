@@ -161,13 +161,14 @@ class BaseStreamModel(Potential):
     Msat: mass of the satellite
     seednum: seed number for the random number generator
     """
-    def __init__(self,  potential_base, prog_w0, ts, Msat, seednum, solver, units=None, **kwargs):
-        super().__init__(units,{'potential_base':potential_base, 'prog_w0':prog_w0, 'ts':ts, 'Msat':Msat, 'seednum':seednum, 'solver':solver})
+    def __init__(self,  potential_base, prog_w0, ts, Msat, seednum, solver, units=None, dense=False, **kwargs):
+        super().__init__(units,{'potential_base':potential_base, 'prog_w0':prog_w0, 'ts':ts, 'Msat':Msat, 'seednum':seednum, 'solver':solver, 'dense':dense})
         self.potential_base = potential_base
         self.prog_w0 = prog_w0
         self.ts = ts
         self.Msat = Msat
         self.seednum = seednum
+        self.dense = dense
         if solver is None:
             self.solver = diffrax.Dopri5(scan_kind='bounded')
         else:
@@ -175,9 +176,14 @@ class BaseStreamModel(Potential):
         self.streamICs = potential_base.gen_stream_ics(ts=self.ts, prog_w0=self.prog_w0, Msat=self.Msat, seed_num=self.seednum, solver=self.solver, **kwargs)
         self.IDs = jnp.arange(len(self.ts))
 
-        #self.prog_back = potential_base.integrate_orbit(w0=self.prog_w0,ts=jnp.array([self.ts.max(), self.ts.min()]), t0=self.ts.max(), t1=self.ts.min(),solver=self.solver).ys[1]
         self.prog_loc_fwd = potential_base.integrate_orbit(w0=self.prog_w0,ts=self.ts, t0=self.ts.min(), t1=self.ts.max(),solver=self.solver, **kwargs).ys        
         self.dRel_dIC = self.release_func_jacobian()
+
+        if dense:
+            #TODO: if gpu use vmapped_dense, if cpu use scan_dense
+            self.stream_interp = potential_base.gen_stream_scan_dense(ts=self.ts, prog_w0=self.prog_w0, Msat=self.Msat, seed_num=self.seednum, solver=self.solver, **kwargs)
+        else:
+            self.stream_interp = None
 
     @partial(jax.jit,static_argnums=(0,))
     def release_func_jacobian(self,):     

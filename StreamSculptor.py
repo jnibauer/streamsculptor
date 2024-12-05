@@ -783,11 +783,38 @@ class Potential:
 
 
 
-################## Some helpers ###############
+################## Some helpers ####################
 @jax.jit
 def eval_dense_stream(t_eval=None, dense_stream=None):
+    """
+    Evaluate dense interpolation of stream model. Returns leading and trailing arm at time t_eval.
+    Must supply dense_stream – an interpolation of the stream model.
+    """
     output = jax.vmap(jax.vmap(lambda s: s.evaluate(t_eval)))(dense_stream)
     return output[:,0,:], output[:,1,:] #lead, trail
+
+@jax.jit
+def eval_dense_stream_id(time=None, interp_func=None, idx=None, lead=True):
+    """"
+    Evaluate the trajectory of a dense interpolation stream, returning only the 
+    trajectory of particle with index label idx. 
+    When lead = True, the leading arm is evaluated.
+    When lead = False, the trailing arm is evaluated.
+    """
+    def lead_func():
+        arr, narr = eqx.partition(interp_func, eqx.is_array)
+        #index x[idx, 0] is lead, x[idx, 1] is trail
+        arr = jax.tree_util.tree_map(lambda x: x[idx,0], arr)
+        interp = eqx.combine(arr, narr)
+        return interp.evaluate(time)
+    def trail_func():
+        arr, narr = eqx.partition(interp_func, eqx.is_array)
+        #index x[idx, 0] is lead, x[idx, 1] is trail
+        arr = jax.tree_util.tree_map(lambda x: x[idx,1], arr)
+        interp = eqx.combine(arr, narr)
+        return interp.evaluate(time)
+    
+    return jax.lax.cond(lead, lead_func, trail_func)
 
 def fill_in_collision_times(ts_stepto_base=None,tcollision=None,dt0_collision=None,collision_twindow=None,t0=None,t1=None):
     """

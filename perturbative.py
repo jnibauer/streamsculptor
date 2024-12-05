@@ -181,6 +181,7 @@ class BaseStreamModel(Potential):
 
         if dense:
             #TODO: if gpu use vmapped_dense, if cpu use scan_dense
+            #evaluate using: lead, trail = StreamSculptor.eval_dense_stream(time, stream_interp)
             self.stream_interp = potential_base.gen_stream_scan_dense(ts=self.ts, prog_w0=self.prog_w0, Msat=self.Msat, seed_num=self.seednum, solver=self.solver, **kwargs)
         else:
             self.stream_interp = None

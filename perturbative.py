@@ -56,7 +56,7 @@ class GenerateMassRadiusPerturbation(Potential):
             flipped_times = jnp.flip(BaseStreamModel.ts)
             prog_fieldICs = integrate_field(w0=self.field_wobs,ts=flipped_times,field=fields.MassRadiusPerturbation_OTF(self), backwards_int=True, **kwargs)
             # Flip back to original time order, since we will integrate from [past, ..., observation time]
-            self.prog_base = prog_fieldICs### for testing, can delete
+            self.prog_base = prog_fieldICs### for testing
             self.prog_fieldICs = jnp.flipud(prog_fieldICs.ys[1])
             self.perturbation_ICs_lead, self.perturbation_ICs_trail = self.compute_perturbation_ICs() # N_lead/trail x N_sh x 12
 
@@ -138,7 +138,47 @@ class GenerateMassRadiusPerturbation(Potential):
         """
         Compute the perturbation field from the interpolated stream.
         """
-        raise NotImplementedError
+        integrator = lambda w0, ts, args: integrate_field(w0=w0,ts=ts,field=fields.MassRadiusPerturbation_Interp(self),jump_ts=self.jump_ts, args=args, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax)
+        integrator = jax.jit(integrator)
+        def cpu_func():
+            @jax.jit
+            def scan_fun(carry, particle_idx):
+                i, lead_deriv_ICs_curr, trail_deriv_ICs_curr = carry
+                args_lead = {'idx':i, 'tail_bool':True}
+                args_trail = {'idx':i, 'tail_bool':False}
+                ts_arr = jnp.array([self.base_stream.ts[i], self.base_stream.ts[-1]])
+
+                lead_derivs = integrator(lead_deriv_ICs_curr,ts_arr,args_lead)
+                lead_derivs = lead_derivs.ys[-1,:]
+
+                trail_derivs = integrator(trail_deriv_ICs_curr,ts_arr,args_trail)
+                trail_derivs = trail_derivs.ys[-1,:]
+                return [i+1, self.perturbation_ICs_lead[i+1], self.perturbation_ICs_trail[i+1]], [lead_derivs, trail_derivs]
+
+            init_carry = [0, self.perturbation_ICs_lead[0], self.perturbation_ICs_trail[0]] #perturbation_ICs_lead
+            particle_ids = self.base_stream.IDs[:-1]
+            final_state, all_states = jax.lax.scan(scan_fun,init_carry,particle_ids)
+            lead_and_derivs, trail_and_derivs = all_states
+            return lead_and_derivs, trail_and_derivs
+
+        def gpu_func():
+            @jax.jit
+            def single_particle_integrate(idx):
+                ts_arr = jnp.array([self.base_stream.ts[idx], self.base_stream.ts[-1]])
+                args_lead = {'idx':idx, 'tail_bool':True}
+                args_trail = {'idx':idx, 'tail_bool':False}
+                lead_derivs = integrator(self.perturbation_ICs_lead[idx],ts_arr,args_lead)
+                lead_derivs = lead_derivs.ys[-1,:]
+
+                trail_derivs = integrator(self.perturbation_ICs_trail[idx],ts_arr,args_trail)
+                trail_derivs = trail_derivs.ys[-1,:]
+                return lead_derivs, trail_derivs
+            particle_ids = self.base_stream.IDs[:-1]
+            lead_and_derivs, trail_and_derivs = jax.vmap(single_particle_integrate)(particle_ids)
+            return lead_and_derivs, trail_and_derivs
+
+        return jax.lax.cond(cpu, cpu_func, gpu_func)
+
 
 class GenerateMassPerturbation(Potential):
     """

@@ -162,7 +162,8 @@ class MassRadiusPerturbation_Interp:
     of a few speedup. The cost is increased memory usage.
 
     coordinate vectors consist of a pytree:
-    FILL IN
+    coords: shape nSH x 12
+    coords[0,:]: [dx/deps,..., dvx/deps,..., d^2x/dthetadeps, ..., d^2vx/dthetadeps] 
     """
     def __init__(self, perturbation_generator):
         self.pertgen = perturbation_generator

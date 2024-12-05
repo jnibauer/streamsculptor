@@ -16,6 +16,7 @@ import diffrax
 import equinox as eqx
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
 from StreamSculptor import Potential
+from StreamSculptor import eval_dense_stream_id
 
 """
 Not all integrations are hamiltonian. fields.py allows for the integration
@@ -32,7 +33,7 @@ term function.
 
 
 @partial(jax.jit,static_argnums=((2,3,4)))
-def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, max_steps=1_000,jump_ts=None, backwards_int=False):
+def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, args=None, rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, max_steps=1_000,jump_ts=None, backwards_int=False):
     """
     Integrate field associated with potential function.
     w0: length 6 array [x,y,z,vx,vy,vz]
@@ -81,7 +82,8 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
         stepsize_controller=stepsize_controller,
         discrete_terminating_event=None,
         max_steps=max_steps,
-        adjoint=DirectAdjoint()
+        adjoint=DirectAdjoint(),
+        args=args
     )
     return solution
 
@@ -149,3 +151,52 @@ class MassRadiusPerturbation_OTF:
         return [jnp.hstack([v0,acceleration0]), 
                 jnp.hstack([d_qdot_d_eps,d_pdot_d_eps, d_qalpha1dot_dtheta, d_palpha1dot_dtheta])]
 
+class MassRadiusPerturbation_Interp:
+    """
+    Apply perturbation theory in the mass and radius of a subhalo potential.
+    Interpolated version. BaseStreamModel must have dense=True in order to support
+    this function. The base trajectories are saved via interpolation, and perturbation
+    trajectories are computed along the interpolated particle trajectories.
+    When sampling many batches of perturbations (order 1000s), this function 
+    eliminates the need to recompute the base stream every time. Can lead to factor
+    of a few speedup. The cost is increased memory usage.
+
+    coordinate vectors consist of a pytree:
+    FILL IN
+    """
+    def __init__(self, perturbation_generator):
+        self.pertgen = perturbation_generator
+        self.base_stream = perturbation_generator.base_stream
+    @partial(jax.jit,static_argnums=(0,))
+    def term(self, t, coords, args):
+        """
+        args is a dictionary:  args['idx'] is the current particle index, and args['tail_bool'] specifies the stream arm
+        If tail_bool is True, interpolate leading arm. If False, interpolate trailing arm.
+        x1, v1: mass perturbations in each coord
+        dx1_dtheta, dv1_dtheta: second order mass*radius perturbations in each coord
+        """
+        idx, tail_bool = args['idx'], args['tail_bool']
+        x0v0 = eval_dense_stream_id(time=t, interp_func=self.base_stream.stream_interp, idx=idx, lead=tail_bool)
+        # Unperturbed, base flow
+        x0, v0 = x0v0[:3], x0v0[3:]
+        # Epsilon Derivs
+        x1, v1 = coords[:,:3], coords[:,3:6] #nSHS x 3
+        # Structural derivs
+        dx1_dtheta, dv1_dtheta = coords[:,6:9], coords[:,9:]
+
+        # acceleration due to perturbation
+        acceleration1 = -self.pertgen.gradientPotentialPerturbation_per_SH(x0,t) # nSH x 3
+        # tidal tensor
+        d2H_dq2 = -jax.jacrev(self.pertgen.gradientPotentialBase)(x0,t) 
+        # For the Hamiltonian considered, dp/deps is just the integrated acceleration. Relabling...
+        d_qdot_d_eps = v1 
+        # Next, injected acceleration: subhalo acceleration + matmul(tidal tensor, dq/deps)
+        d_pdot_d_eps = acceleration1 + jnp.einsum('ij,kj->ki',d2H_dq2,x1)#,optimize='optimal') #nSH x 3
+        
+        # Now handle radius deviations
+        acceleration1_r = -self.pertgen.gradientPotentialStructural_per_SH(x0,t) # nSH x 3
+        d_qalpha1dot_dtheta = dv1_dtheta
+        d_palpha1dot_dtheta = acceleration1_r + jnp.einsum('ij,kj->ki',d2H_dq2,dx1_dtheta)#,optimize='optimal')#jnp.matmul(d2H_dq2,dx1_dtheta)
+        
+        # Package the output: [Nsh x 12]
+        return jnp.hstack([d_qdot_d_eps,d_pdot_d_eps, d_qalpha1dot_dtheta, d_palpha1dot_dtheta])

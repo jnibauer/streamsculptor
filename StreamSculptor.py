@@ -795,7 +795,7 @@ def eval_dense_stream(t_eval=None, dense_stream=None):
 
 @jax.jit
 def eval_dense_stream_id(time=None, interp_func=None, idx=None, lead=True):
-    """"
+    """
     Evaluate the trajectory of a dense interpolation stream, returning only the 
     trajectory of particle with index label idx. 
     When lead = True, the leading arm is evaluated.

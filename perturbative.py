@@ -133,6 +133,13 @@ class GenerateMassRadiusPerturbation(Potential):
         
         return jax.lax.cond(cpu, cpu_func, gpu_func)
 
+    @partial(jax.jit,static_argnums=(0,2))
+    def compute_perturbation_Interp(self,cpu=True,solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, dtmax=None):
+        """
+        Compute the perturbation field from the interpolated stream.
+        """
+        raise NotImplementedError
+
 class GenerateMassPerturbation(Potential):
     """
     Class to define a perturbation object, **at fixed subhalo radius**

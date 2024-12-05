@@ -100,7 +100,6 @@ class GenerateMassRadiusPerturbation(Potential):
         integrator = lambda w0, ts: integrate_field(w0=w0,ts=ts,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax)
         integrator = jax.jit(integrator)
         def cpu_func():
-            @jax.jit
             def scan_fun(carry, particle_idx):
                 i, lead_deriv_ICs_curr, trail_deriv_ICs_curr = carry
                 ICs_total_lead = [self.base_realspace_ICs_lead[i], lead_deriv_ICs_curr]
@@ -119,7 +118,6 @@ class GenerateMassRadiusPerturbation(Potential):
             return lead_and_derivs, trail_and_derivs
 
         def gpu_func():
-            @jax.jit
             def single_particle_integrate(idx):
                 ts_arr = jnp.array([self.base_stream.ts[idx], self.base_stream.ts[-1]])
                 lead_space_and_derivs = integrator([self.base_realspace_ICs_lead[idx], self.perturbation_ICs_lead[idx]],ts_arr)
@@ -141,7 +139,6 @@ class GenerateMassRadiusPerturbation(Potential):
         integrator = lambda w0, ts, args: integrate_field(w0=w0,ts=ts,field=fields.MassRadiusPerturbation_Interp(self),jump_ts=self.jump_ts, args=args, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax)
         integrator = jax.jit(integrator)
         def cpu_func():
-            @jax.jit
             def scan_fun(carry, particle_idx):
                 i, lead_deriv_ICs_curr, trail_deriv_ICs_curr = carry
                 args_lead = {'idx':i, 'tail_bool':True}
@@ -162,7 +159,6 @@ class GenerateMassRadiusPerturbation(Potential):
             return lead_and_derivs, trail_and_derivs
 
         def gpu_func():
-            @jax.jit
             def single_particle_integrate(idx):
                 ts_arr = jnp.array([self.base_stream.ts[idx], self.base_stream.ts[-1]])
                 args_lead = {'idx':idx, 'tail_bool':True}
@@ -208,8 +204,8 @@ class BaseStreamModel(Potential):
     Msat: mass of the satellite
     seednum: seed number for the random number generator
     """
-    def __init__(self,  potential_base, prog_w0, ts, Msat, seednum, solver, units=None, dense=False, **kwargs):
-        super().__init__(units,{'potential_base':potential_base, 'prog_w0':prog_w0, 'ts':ts, 'Msat':Msat, 'seednum':seednum, 'solver':solver, 'dense':dense})
+    def __init__(self,  potential_base, prog_w0, ts, Msat, seednum, solver, units=None, dense=False, cpu=True, **kwargs):
+        super().__init__(units,{'potential_base':potential_base, 'prog_w0':prog_w0, 'ts':ts, 'Msat':Msat, 'seednum':seednum, 'solver':solver, 'dense':dense, 'cpu':cpu})
         self.potential_base = potential_base
         self.prog_w0 = prog_w0
         self.ts = ts
@@ -227,9 +223,11 @@ class BaseStreamModel(Potential):
         self.dRel_dIC = self.release_func_jacobian()
 
         if dense:
-            #TODO: if gpu use vmapped_dense, if cpu use scan_dense
-            #evaluate using: lead, trail = StreamSculptor.eval_dense_stream(time, stream_interp)
-            self.stream_interp = potential_base.gen_stream_scan_dense(ts=self.ts, prog_w0=self.prog_w0, Msat=self.Msat, seed_num=self.seednum, solver=self.solver, **kwargs)
+            if cpu:
+                #evaluate using: lead, trail = StreamSculptor.eval_dense_stream(time, stream_interp)
+                self.stream_interp = potential_base.gen_stream_scan_dense(ts=self.ts, prog_w0=self.prog_w0, Msat=self.Msat, seed_num=self.seednum, solver=self.solver, **kwargs)
+            if cpu is False:
+                self.stream_interp = potential_base.gen_stream_vmapped_dense(ts=self.ts, prog_w0=self.prog_w0, Msat=self.Msat, seed_num=self.seednum, solver=self.solver, **kwargs)
         else:
             self.stream_interp = None
 

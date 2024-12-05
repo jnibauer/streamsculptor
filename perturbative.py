@@ -64,7 +64,7 @@ class GenerateMassRadiusPerturbation(Potential):
             self.base_realspace_ICs_trail =  jnp.hstack([self.base_stream.streamICs[1], self.base_stream.streamICs[3]]) # N_trail x 6
             
         
-    @partial(jax.jit,static_argnums=(0,))
+    @partial(jax.jit,static_argnums=(0,1))
     def compute_base_stream(self,cpu=True):
         """
         Compute the unperturbed stream.
@@ -95,7 +95,7 @@ class GenerateMassRadiusPerturbation(Potential):
 
         return lead_deriv_ICs, trail_deriv_ICs # N_lead x N_sh x 12
 
-    @partial(jax.jit,static_argnums=(0,2))
+    @partial(jax.jit,static_argnums=(0,1,2))
     def compute_perturbation_OTF(self, cpu=True, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, dtmax=None):
         integrator = lambda w0, ts: integrate_field(w0=w0,ts=ts,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax)
         integrator = jax.jit(integrator)
@@ -131,7 +131,7 @@ class GenerateMassRadiusPerturbation(Potential):
         
         return jax.lax.cond(cpu, cpu_func, gpu_func)
 
-    @partial(jax.jit,static_argnums=(0,2))
+    @partial(jax.jit,static_argnums=(0,1,2))
     def compute_perturbation_Interp(self,cpu=True,solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, dtmax=None):
         """
         Compute the perturbation field from the interpolated stream.

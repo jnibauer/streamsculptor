@@ -130,6 +130,46 @@ class GenerateMassRadiusPerturbation(Potential):
             return lead_and_derivs, trail_and_derivs
         
         return jax.lax.cond(cpu, cpu_func, gpu_func)
+        
+    ################## EXPERIMENTAL ##################
+    @partial(jax.jit,static_argnums=(0,1,2))
+    def compute_perturbation_jacobian_OTF(self, cpu=True, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, dtmax=None):
+        integrator = lambda realspace_w0, pert_w0, ts: integrate_field(w0=[realspace_w0, pert_w0],ts=ts,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax)
+        integrator = jax.jit(integrator)
+        jacobain_integrator = jax.jacfwd(integrator,argnums=(0,))
+        def cpu_func():
+            def scan_fun(carry, particle_idx):
+                i, lead_deriv_ICs_curr, trail_deriv_ICs_curr = carry
+                ICs_total_lead = [self.base_realspace_ICs_lead[i], lead_deriv_ICs_curr]
+                ICs_total_trail = [self.base_realspace_ICs_trail[i], trail_deriv_ICs_curr]
+                ts_arr = jnp.array([self.base_stream.ts[i], self.base_stream.ts[-1]])
+                lead_space_and_derivs = jacobain_integrator(self.base_realspace_ICs_lead[i], lead_deriv_ICs_curr, ts_arr)
+                lead_space_and_derivs = [lead_space_and_derivs, lead_space_and_derivs]
+                trail_space_and_derivs = jacobain_integrator(self.base_realspace_ICs_trail[i], trail_deriv_ICs_curr, ts_arr)
+                trail_space_and_derivs = [trail_space_and_derivs, trail_space_and_derivs]
+                return [i+1, self.perturbation_ICs_lead[i+1], self.perturbation_ICs_trail[i+1]], [lead_space_and_derivs, trail_space_and_derivs]
+
+            init_carry = [0, self.perturbation_ICs_lead[0], self.perturbation_ICs_trail[0]] #perturbation_ICs_lead
+            particle_ids = self.base_stream.IDs[:-1]
+            final_state, all_states = jax.lax.scan(scan_fun,init_carry,particle_ids)
+            lead_and_derivs, trail_and_derivs = all_states
+            return lead_and_derivs, trail_and_derivs
+
+        def gpu_func():
+            def single_particle_integrate(idx):
+                ts_arr = jnp.array([self.base_stream.ts[idx], self.base_stream.ts[-1]])
+                lead_space_and_derivs = jacobain_integrator(self.base_realspace_ICs_lead[idx], self.perturbation_ICs_lead[idx],ts_arr)
+                lead_space_and_derivs = [lead_space_and_derivs, lead_space_and_derivs]
+                trail_space_and_derivs = jacobain_integrator(self.base_realspace_ICs_trail[idx], self.perturbation_ICs_trail[idx],ts_arr)
+                trail_space_and_derivs = [trail_space_and_derivs, trail_space_and_derivs]
+                return lead_space_and_derivs, trail_space_and_derivs
+            particle_ids = self.base_stream.IDs[:-1]
+            lead_and_derivs, trail_and_derivs = jax.vmap(single_particle_integrate)(particle_ids)
+            return lead_and_derivs, trail_and_derivs
+        
+        return jax.lax.cond(cpu, cpu_func, gpu_func)
+    ##################################################
+    
 
     @partial(jax.jit,static_argnums=(0,1,2))
     def compute_perturbation_Interp(self,cpu=True,solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, dtmax=None):

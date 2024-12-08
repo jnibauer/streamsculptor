@@ -32,7 +32,7 @@ term function.
 """
 
 
-@partial(jax.jit,static_argnums=((2,3,4)))
+@partial(jax.jit,static_argnums=((2,3,4,10)))
 def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, args=None, rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, max_steps=1_000,jump_ts=None, backwards_int=False):
     """
     Integrate field associated with potential function.
@@ -52,7 +52,8 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
     atol: float = atol  
     
     stepsize_controller = PIDController(rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,force_dtmin=True,jump_ts=jump_ts)
-    max_steps: int = max_steps
+    #max_steps: int = max_steps
+    max_steps = int(max_steps)
 
     def false_func():
         """

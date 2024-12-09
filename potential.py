@@ -91,14 +91,38 @@ class HernquistPotential(Potential):
     def potential(self,xyz,t):
         r = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 + 0.00005)
         return -self._G*self.m / (r + self.r_s) 
+
 class ProgenitorPotential(Potential):
-    def __init__(self, m, r_s, interp_func, units=None):
-        super().__init__(units, {'m': m, 'r_s': r_s, 'interp_func':interp_func})
-        self.prog_pot = PlummerPotential(m=self.m,r_s=self.r_s,units=units)
+    """
+    Progenitor potential centered on a moving spline-interpolated track.
+    prog_pot is the functional form of the potential, e.g., PlummerPotential
+    Must take mass and scale radius parameters: m, r_s
+    """
+    def __init__(self, m, r_s, interp_func, prog_pot, units=None):
+        super().__init__(units, {'m': m, 'r_s': r_s, 'interp_func':interp_func, 'prog_pot':prog_pot})
+        self.prog_pot = prog_pot(m=self.m,r_s=self.r_s,units=units)
     @partial(jax.jit,static_argnums=(0,))
     def potential(self,xyz,t):
         eval_pt = xyz - self.interp_func.evaluate(t)[:3]
         return self.prog_pot.potential(eval_pt,t)
+
+class TimeDepProgenitorPotential(Potential):
+    """
+    Time dependent progenitor potential in the location, mass, and scale-radius of the progenitor
+    prog_pot is the functional form of the potential, e.g., PlummerPotential
+    Must take mass and scale radius parameters: m, r_s
+    mass_spl and r_s_spl are spline-interpolated functions that take a single argument [time]
+    and output a scalar [mass, radius]
+    """
+    def __init__(self, mass_spl, r_s_spl, interp_func, prog_pot, units=None):
+        super().__init__(units, {'mass_spl': mass_spl, 'r_s_spl': r_s_spl, 'interp_func':interp_func, 'prog_pot':prog_pot})
+    @partial(jax.jit,static_argnums=(0,))
+    def potential(self,xyz,t):
+        eval_pt = xyz - self.interp_func.evaluate(t)[:3]
+        mass_curr = self.mass_spl(t)
+        r_s_curr = self.r_s_spl(t)
+        pot_curr = self.prog_pot(m=mass_curr,r_s=r_s_curr,units=self.units)
+        return pot_curr.potential(eval_pt,t)
 
 
 

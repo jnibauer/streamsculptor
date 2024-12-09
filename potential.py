@@ -97,6 +97,7 @@ class ProgenitorPotential(Potential):
     Progenitor potential centered on a moving spline-interpolated track.
     prog_pot is the functional form of the potential, e.g., PlummerPotential
     Must take mass and scale radius parameters: m, r_s
+    interp_func is a diffrax interpolated solution to the progenitor's trajectory
     """
     def __init__(self, m, r_s, interp_func, prog_pot, units=None):
         super().__init__(units, {'m': m, 'r_s': r_s, 'interp_func':interp_func, 'prog_pot':prog_pot})
@@ -113,6 +114,7 @@ class TimeDepProgenitorPotential(Potential):
     Must take mass and scale radius parameters: m, r_s
     mass_spl and r_s_spl are spline-interpolated functions that take a single argument [time]
     and output a scalar [mass, radius]
+    interp_func is a diffrax interpolated solution to the progenitor's trajectory
     """
     def __init__(self, mass_spl, r_s_spl, interp_func, prog_pot, units=None):
         super().__init__(units, {'mass_spl': mass_spl, 'r_s_spl': r_s_spl, 'interp_func':interp_func, 'prog_pot':prog_pot})

@@ -18,7 +18,7 @@ usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
 from StreamSculptor import Potential
 import fields
 from fields import integrate_field
-
+from StreamSculptor import custom_release_model
 
 class GenerateMassRadiusPerturbation(Potential):
     """

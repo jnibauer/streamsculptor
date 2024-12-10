@@ -1,4 +1,3 @@
-### Put all perturbation theory potentials here
 from functools import partial
 from astropy.constants import G
 import astropy.coordinates as coord
@@ -288,5 +287,187 @@ class BaseStreamModel(Potential):
         mapped_release_jacobian = jax.vmap(jax.jacfwd(release_func),in_axes=((0,None,0,0,None)))
         return mapped_release_jacobian(self.prog_loc_fwd, self.Msat, self.IDs, self.ts, self.seednum)
     
+    
+class CustomBaseStreamModel(Potential):
+    """
+    Class to define a stream model object, in the absence of linear perturbations.
+    Zeroth order quantities are precomputed here, excluding the trajectory of the stream particles.
+    potiential_base: potential function for the base potential, in H_base
+    prog_w0: initial conditions of the progenitor. This will be integrated _forwards_ in time.
+    ts: array of stripping times. ts[-1] is the observation time.
+    Msat: mass of the satellite
+    seednum: seed number for the random number generator
+    """
+    def __init__(self,  potential_base=None, prog_w0=None, ts=None, pos_rel=None, vel_rel=None, solver=diffrax.Dopri5(), units=None, dense=False, cpu=True, **kwargs):
+        super().__init__(units,{'potential_base':potential_base, 'prog_w0':prog_w0, 'ts':ts, 'pos_rel':pos_rel, 'vel_rel':vel_rel, 'solver':solver, 'dense':dense, 'cpu':cpu})
+        self.potential_base = potential_base
+        self.prog_w0 = prog_w0
+        self.ts = ts
+        self.pos_rel = pos_rel
+        self.vel_rel = vel_rel
+
+        self.prog_at_ts = self.potential_base.integrate_orbit(w0=self.prog_w0,ts=self.ts, t0=self.ts.min(), t1=self.ts.max(),solver=self.solver, **kwargs).ys # len(ts) x 6
+        streamICs = custom_release_model(pos_prog=self.prog_at_ts[:,:3], vel_prog=self.prog_at_ts[:,3:], pos_rel=self.pos_rel, vel_rel=self.vel_rel)
+        self.streamICs = jnp.hstack([streamICs[0], streamICs[1]])
+
+        self.dense = dense
+        if solver is None:
+            self.solver = diffrax.Dopri5(scan_kind='bounded')
+        else:
+            self.solver = solver
+        self.IDs = jnp.arange(len(self.ts))
+        self.prog_loc_fwd = potential_base.integrate_orbit(w0=self.prog_w0,ts=self.ts, t0=self.ts.min(), t1=self.ts.max(),solver=self.solver, **kwargs).ys        
+        
+        self.dRel_dIC = self.release_func_jacobian()
+
+        if dense:
+            #evaluate using: lead, trail = StreamSculptor.eval_dense_stream(time, stream_interp)
+            self.stream_interp = jax.vmap(potential_base.integrate_orbit,in_axes=(0,0,None,None,None))(w0=self.streamICs, t0=self.ts, t1=self.ts[-1], solver=self.solver, dense=True)
+
+        else:
+            self.stream_interp = None
+
+    @partial(jax.jit,static_argnums=(0,))
+    def gen_stream(self):
+        """
+        Compute the unperturbed stream.
+        """
+        integrator = lambda w0, t0, t1: self.potential_base.integrate_orbit(w0=w0, t0=t0, t1=t1, dense=False, solver=self.solver, ts=jnp.array([t1]))
+        return jax.vmap(integrator,in_axes=((0,0,None,)))(self.streamICs[:-1,:], self.ts[:-1], self.ts[-1])
+
+    @partial(jax.jit,static_argnums=(0,))
+    def release_func_jacobian(self,):     
+        """ 
+        Compute the Jacobian of the release function with repsect to (q,p) for leading, trailing arms.
+        prog_loc is in phasespace. A 6dim progenitor phase space location
+        Output has len(ts) x 2 x 6 x 6 dimensions
+        """
+        @jax.jit
+        def release_func(prog_loc, pos_rel, vel_rel):
+            """
+            Takes 1d array inputs (we will batch using vmapped outside of this function)
+            """
+            pos_out, vel_out =  custom_release_model(pos_prog=prog_loc[:3], vel_prog=prog_loc[3:], pos_rel=pos_rel, vel_rel=vel_rel)
+            return jnp.hstack([pos_out,vel_out])
+        
+        mapped_release_jacobian = jax.vmap(jax.jacfwd(release_func),in_axes=((0,0,0)))
+        return mapped_release_jacobian(self.prog_at_ts, self.pos_rel, self.vel_rel) # N x 6 x 6
 
 
+class GenerateMassRadiusPerturbation_CustomBase(Potential):
+    """
+    Class to define a perturbation object, with a *custom base stream model*
+    potiential_base: potential function for the base potential, in H_base
+    potential_perturbation: gravitation potential of the perturbation(s)
+    potential_structural: defined as the derivative of the perturbing potential wrspct to the structural parameter.
+    dPhi_alpha / dstructural. For instance, dPhi_alpha(x, t) / dr.
+    """
+    def __init__(self, potential_base, potential_perturbation, potential_structural, BaseStreamModel=None, units=None, **kwargs):
+        super().__init__(units,{'potential_base':potential_base, 'potential_perturbation':potential_perturbation, 'potential_structural':potential_structural, 'BaseStreamModel':BaseStreamModel})
+        self.gradient = None
+        self.potential_base = potential_base
+        self.gradientPotentialBase = potential_base.gradient
+        self.gradientPotentialPerturbation = potential_perturbation.gradient
+        self.gradientPotentialStructural = potential_structural.gradient
+
+        self.gradientPotentialPerturbation_per_SH = jax.jit(jax.jacfwd(potential_perturbation.potential_per_SH))
+        self.gradientPotentialStructural_per_SH = jax.jit(jax.jacfwd(potential_structural.potential_per_SH))
+        
+        
+        self.base_stream = BaseStreamModel
+        self.num_pert = self.potential_perturbation.subhalo_x0.shape[0]
+        ## Note: prog_w0 is the *intial condition*, that we must integrate forward from
+        ## .prog_loc_fwd[-1] is the final (observed) coordinate.
+        self.field_wobs = [BaseStreamModel.prog_loc_fwd[-1], jnp.zeros((self.num_pert, 12))]
+        self.jump_ts = None
+        # Need to integrate backwards in time. BaseStreamModel.ts is in increasing time order, from past to present day [past, ..., observation time]
+        flipped_times = jnp.flip(BaseStreamModel.ts)
+        prog_fieldICs = integrate_field(w0=self.field_wobs,ts=flipped_times,field=fields.MassRadiusPerturbation_OTF(self), backwards_int=True, **kwargs)
+        # Flip back to original time order, since we will integrate from [past, ..., observation time]
+        self.prog_base = prog_fieldICs### for testing
+        self.prog_fieldICs = jnp.flipud(prog_fieldICs.ys[1])
+        self.perturbation_ICs = self.compute_perturbation_ICs() # N_star x N_sh x 12
+
+        self.base_realspace_ICs = self.base_stream.streamICs # N_star x 6
+            
+        
+    @partial(jax.jit,static_argnums=(0,1))
+    def compute_base_stream(self,cpu=True):
+        """
+        Compute the unperturbed stream.
+        """
+        return self.base_stream.gen_stream()
+
+    @partial(jax.jit,static_argnums=(0,))
+    def compute_perturbation_ICs(self):
+        """
+        Compute the initial conditions for the perturbation vector field.
+        """
+       
+        pert_ICs_deps = jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC,self.prog_fieldICs[:,:,:6])
+        pert_ICs_depsdr =  jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC,self.prog_fieldICs[:,:,6:])
+        deriv_ICs = jnp.dstack([pert_ICs_deps,pert_ICs_depsdr])
+        return deriv_ICs # N_star x N_sh x 12
+
+    @partial(jax.jit,static_argnums=(0,1,2))
+    def compute_perturbation_OTF(self, cpu=True, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, dtmax=None):
+        integrator = lambda w0, ts: integrate_field(w0=w0,ts=ts,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax)
+        integrator = jax.jit(integrator)
+        def cpu_func():
+            def scan_fun(carry, particle_idx):
+                i, deriv_ICs_curr = carry
+                ICs_total = [self.base_realspace_ICs[i], deriv_ICs_curr]
+                ts_arr = jnp.array([self.base_stream.ts[i], self.base_stream.ts[-1]])
+                space_and_derivs = integrator(ICs_total,ts_arr)
+                space_and_derivs = [space_and_derivs.ys[0][-1,:], space_and_derivs.ys[1][-1,:]]
+                return [i+1, self.perturbation_ICs[i+1]], space_and_derivs
+
+            init_carry = [0, self.perturbation_ICs[0]] 
+            particle_ids = self.base_stream.IDs[:-1]
+            final_state, all_states = jax.lax.scan(scan_fun,init_carry,particle_ids)
+            space_and_derivs = all_states
+            return space_and_derivs
+
+        def gpu_func():
+            def single_particle_integrate(idx):
+                ts_arr = jnp.array([self.base_stream.ts[idx], self.base_stream.ts[-1]])
+                space_and_derivs = integrator([self.base_realspace_ICs[idx], self.perturbation_ICs[idx]],ts_arr)
+                space_and_derivs = [space_and_derivs.ys[0][-1,:], space_and_derivs.ys[1][-1,:]]
+                return space_and_derivs
+            particle_ids = self.base_stream.IDs[:-1]
+            space_and_derivs = jax.vmap(single_particle_integrate)(particle_ids)
+            return space_and_derivs
+        
+        return jax.lax.cond(cpu, cpu_func, gpu_func)
+        
+    ################## EXPERIMENTAL ##################
+    @partial(jax.jit,static_argnums=(0,1,2))
+    def compute_perturbation_jacobian_OTF(self, cpu=True, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, dtmax=None):
+        integrator = lambda realspace_w0, pert_w0, ts: integrate_field(w0=[realspace_w0, pert_w0],ts=ts,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax)
+        integrator = jax.jit(integrator)
+        jacobian_integrator = jax.jacfwd(integrator,argnums=(0,))
+        def cpu_func():
+            def scan_fun(carry, particle_idx):
+                i, deriv_ICs_curr = carry
+                ts_arr = jnp.array([self.base_stream.ts[i], self.base_stream.ts[-1]])
+                space_and_derivs = jacobian_integrator(self.base_realspace_ICs[i], deriv_ICs_curr, ts_arr)
+                space_and_derivs = [space_and_derivs.ys[0][-1,:], space_and_derivs.ys[1][-1,:]]
+                return [i+1, self.perturbation_ICs[i+1]], [space_and_derivs]
+
+            init_carry = [0, self.perturbation_ICs[0]] 
+            particle_ids = self.base_stream.IDs[:-1]
+            final_state, all_states = jax.lax.scan(scan_fun,init_carry,particle_ids)
+            space_and_derivs = all_states
+            return space_and_derivs
+
+        def gpu_func():
+            def single_particle_integrate(idx):
+                ts_arr = jnp.array([self.base_stream.ts[idx], self.base_stream.ts[-1]])
+                space_and_derivs = jacobian_integrator(self.base_realspace_ICs[idx], self.perturbation_ICs[idx],ts_arr)
+                space_and_derivs = [space_and_derivs.ys[0][-1,:], space_and_derivs.ys[1][-1,:]]
+                return space_and_derivs
+            particle_ids = self.base_stream.IDs[:-1]
+            space_and_derivs = jax.vmap(single_particle_integrate)(particle_ids)
+            return space_and_derivs
+        
+        return jax.lax.cond(cpu, cpu_func, gpu_func)

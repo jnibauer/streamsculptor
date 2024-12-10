@@ -983,16 +983,4 @@ def gen_stream_scan_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=Non
     return lead_arm, trail_arm
 
 
-@jax.jit
-def custom_release_model(pos_prog=None, vel_prog=None, pos_rel=None, vel_rel=None):
-    """
-    Custom release model for the stream.
-    all inputs are length 3 arrays or shape N x 3 
-    pos_prog: 3d position of progenitor 
-    vel_prog: 3d velocity of progenitor
-    pos_rel: 3d position of released particle w/ origin on progenitor
-    vel_rel: 3d velocity of released particle w/ origin on progenitor
-    """
-    pos_init = pos_prog + pos_rel
-    vel_init = vel_prog + vel_rel
-    return pos_init, vel_init
+

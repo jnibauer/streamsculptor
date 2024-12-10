@@ -287,7 +287,7 @@ class BaseStreamModel(Potential):
         mapped_release_jacobian = jax.vmap(jax.jacfwd(release_func),in_axes=((0,None,0,0,None)))
         return mapped_release_jacobian(self.prog_loc_fwd, self.Msat, self.IDs, self.ts, self.seednum)
     
-    
+
 class CustomBaseStreamModel(Potential):
     """
     Class to define a stream model object, in the absence of linear perturbations.
@@ -296,7 +296,7 @@ class CustomBaseStreamModel(Potential):
     prog_w0: initial conditions of the progenitor. This will be integrated _forwards_ in time.
     ts: array of stripping times. ts[-1] is the observation time.
     Msat: mass of the satellite
-    seednum: seed number for the random number generator
+    seednum: seed number for the random number generator.
     """
     def __init__(self,  potential_base=None, prog_w0=None, ts=None, pos_rel=None, vel_rel=None, solver=diffrax.Dopri5(), units=None, dense=False, cpu=True, **kwargs):
         super().__init__(units,{'potential_base':potential_base, 'prog_w0':prog_w0, 'ts':ts, 'pos_rel':pos_rel, 'vel_rel':vel_rel, 'solver':solver, 'dense':dense, 'cpu':cpu})

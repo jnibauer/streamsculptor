@@ -128,6 +128,8 @@ class Nbody_field:
         distances = jnp.sqrt(distances_squared)
         # Compute pairwise forces
         forces = (self._G * self.masses[:, None] * self.masses[None, :] / distances_squared)[:, :, None] * displacements / distances[:, :, None]
+        # Zero out self-interaction forces (diagonal elements)
+        forces = jnp.where(jnp.eye(x.shape[0])[:, :, None] == 1, 0.0, forces)
 
         # Sum forces to get accelerations
         self_grav_acceleration = jnp.sum(forces, axis=0) / self.masses[:, None]

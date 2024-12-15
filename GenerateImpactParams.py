@@ -77,7 +77,6 @@ class ImpactGenerator:
         """
         Get impact parameters in Cartesian coordinates
         _____________________________________________________
-        pot: potential function
         tobs: the obervation time
         particle_mean: average phase-space location of stream particles at the observation time, tobs
         _____________________________________________________

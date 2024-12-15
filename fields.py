@@ -17,6 +17,7 @@ import equinox as eqx
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
 from StreamSculptor import Potential
 from StreamSculptor import eval_dense_stream_id
+import potential
 
 """
 Not all integrations are hamiltonian. fields.py allows for the integration
@@ -101,6 +102,40 @@ class hamiltonian_field:
         x, v = xv[:3], xv[3:]
         acceleration = -self.pot.gradient(x,t)
         return jnp.hstack([v,acceleration])
+
+class Nbody_field:
+    """
+    Nbody field: (q,p) for N particles.
+    """
+    def __init__(self, ext_pot=None, masses=None, units=None, eps=1e-3):
+        if ext_pot is None:
+            ext_pot = potential.PlummerPotential(m=0.0, r_s=1.0, units=usys)
+        self.ext_pot = ext_pot
+        self.masses = masses
+        self._G = jnp.array(G.decompose(units).value)
+        self.eps = eps
+    @partial(jax.jit,static_argnums=(0,))
+    def term(self, t, xv, args):
+        """
+        xv: (N,6) array of positions and velocities
+        masses: (N,) array of masses
+        """
+        x, v = xv[:, :3], xv[:, 3:]
+        # Compute pairwise displacement vectors
+        displacements = x[:, None, :] - x[None, :, :]
+        # Compute squared distances with softening
+        distances_squared = jnp.sum(displacements**2, axis=-1) + self.eps**2
+        distances = jnp.sqrt(distances_squared)
+        # Compute pairwise forces
+        forces = (self._G * self.masses[:, None] * self.masses[None, :] / distances_squared)[:, :, None] * displacements / distances[:, :, None]
+
+        # Sum forces to get accelerations
+        self_grav_acceleration = jnp.sum(forces, axis=0) / self.masses[:, None]
+        # total acceleration is self-gravity + external acceleration 
+        total_acceleration = self_grav_acceleration - jax.vmap(self.ext_pot.gradient, in_axes=(0, None))(x, t)
+
+        return jnp.hstack([v, total_acceleration])
+        
 
 
 class MassRadiusPerturbation_OTF:

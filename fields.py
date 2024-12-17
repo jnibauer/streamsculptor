@@ -27,21 +27,21 @@ Vector fields are defined as a class. The terms of the vector field
 must be defined with a function term(t, coords, args).
 
 coords do not need to represent position and velocity. For instance,
-in perturbation theory the coordinate space is derivatives of position/velocity
+when integrating perturbative equations the coordinate space is *derivatives* of position/velocity
 coordinates. The derivatives are evolved via an update rule, specified by the 
 term function.
 """
 
 
 @partial(jax.jit,static_argnums=((2,3,4,10)))
-def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, args=None, rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, max_steps=1_000,jump_ts=None, backwards_int=False):
+def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, args=None, rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, max_steps=1_000,jump_ts=None, backwards_int=False,t0=0.0, t1=0.0):
     """
-    Integrate field associated with potential function.
+    Integrate a trajectory on a field.
     w0: length 6 array [x,y,z,vx,vy,vz]
     ts: array of saved times. Must be at least length 2, specifying a minimum and maximum time. This does _not_ determine the timestep
     dense: boolean array.  When False, return orbit at times ts. When True, return dense interpolation of orbit between ts.min() and ts.max()
     solver: integrator
-    field: instance of a potential function (i.e., pot.velocity_acceleration) specifying the field that we are integrating on
+    field: specifies the field that we are integrating on
     rtol, atol: tolerance for PIDController, adaptive timestep
     dtmin: minimum timestep (in Myr)
     max_steps: maximum number of allowed timesteps
@@ -56,6 +56,9 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
     #max_steps: int = max_steps
     max_steps = int(max_steps)
 
+    ## Below we specify how to handle t0, t1
+    ## If t0 == t1, t0 and t1 are computed using ts array (default)
+    ## If t0 != t1, the user-specified values are utilized
     def false_func():
         """
         Integrating forward in time: t1 > t0
@@ -70,8 +73,15 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
         t0 = ts.max()
         t1 = ts.min()
         return t0, t1
-    t0, t1 = jax.lax.cond(backwards_int, true_func, false_func)
+
+    def t0_t1_are_different(): 
+        return t0, t1
+    def t0_t1_are_same():
+        t0, t1 = jax.lax.cond(backwards_int, true_func, false_func)
+        return t0, t1
     
+    t0, t1 = jax.lax.cond(t0 != t1, t0_t1_are_different, t0_t1_are_same)
+
 
     solution = diffeqsolve(
         terms=term,
@@ -91,7 +101,7 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
 
 class hamiltonian_field:
     """
-    Standard hamiltonian field: (q,p).
+    Standard hamiltonian field.
     This is the same as the velocity_acceleration term in integrate orbit.
     This class is redundant, and only included for pedagogical/tutorial purposes.
     """
@@ -105,9 +115,16 @@ class hamiltonian_field:
 
 class Nbody_field:
     """
-    Nbody field: (q,p) for N particles.
+    Nbody field
+    The term computes pairwise forces between particles.
     """
     def __init__(self, ext_pot=None, masses=None, units=None, eps=1e-3):
+        """
+        ext_pot: external potential. If None, no external potential is used.
+        masses: array of masses for the N particles
+        units: astropy unit system
+        eps: softening length [kpc]
+        """
         if ext_pot is None:
             ext_pot = potential.PlummerPotential(m=0.0, r_s=1.0, units=usys)
         self.ext_pot = ext_pot
@@ -198,7 +215,7 @@ class MassRadiusPerturbation_Interp:
     When sampling many batches of perturbations (order 1000s), this function 
     eliminates the need to recompute the base stream every time. Can lead to factor
     of a few speedup. The cost is increased memory usage.
-
+    --------------------------------------------------------------------------------
     coordinate vectors consist of a pytree:
     coords: shape nSH x 12
     coords[0,:]: [dx/deps,..., dvx/deps,..., d^2x/dthetadeps, ..., d^2vx/dthetadeps] 

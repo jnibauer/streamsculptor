@@ -265,6 +265,23 @@ class BovyMWPotential2014(Potential):
     def potential(self, xyz,t):
         return self.pot.potential(xyz,t)
 
+class TimeDepTranslatingPotential(Potential):
+    """
+    Time dependent potential that translates with a spline-interpolated track.
+    pot: potential object
+    center_spl: Jax differentiable spline-interpolated track of the center of the potential. Must take a single argument [time]
+    --> center_spl(t) returns the center of the potential at time t
+    """
+    def __init__(self, pot, center_spl, units=None):
+        super().__init__(units,{'pot':pot, 'center_spl':center_spl})
+
+    @partial(jax.jit,static_argnums=(0,))
+    def potential(self, xyz, t):
+        center = self.center_spl(t)
+        xyz_adjust = xyz - center
+        return self.pot.potential(xyz_adjust,t)
+
+
 
 
 ########################## SUBHALOS ###########################

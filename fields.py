@@ -256,3 +256,16 @@ class MassRadiusPerturbation_Interp:
         
         # Package the output: [Nsh x 12]
         return jnp.hstack([d_qdot_d_eps,d_pdot_d_eps, d_qalpha1dot_dtheta, d_palpha1dot_dtheta])
+
+
+class MW_LMC_field:
+    def __init__(self, pot_MW=None, pot_LMC=None):
+        self.pot_MW = pot_MW
+        self.pot_LMC = pot_LMC
+
+    @partial(jax.jit,static_argnums=(0,))
+    def term(self,t, coords, args):
+        x_MW, v_MW = coords[0][:3], coords[0][3:]
+        x_LMC, v_LMC = coords[1][:3], coords[1][3:]
+        ## FILL IN the rest
+        raise NotImplementedError

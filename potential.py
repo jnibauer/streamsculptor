@@ -18,6 +18,10 @@ from jax.scipy import special
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
 
 from StreamSculptor import Potential
+from InterpAGAMA import AGAMA_Spheroid
+import interpax
+import os
+
 
 
 class LMCPotential(Potential):
@@ -305,6 +309,106 @@ class UniformAcceleration(Potential):
     def acceleration(self,xyz,t):
         return -self.gradient(xyz, t)
     
+
+class MW_LMC_Potential(Potential):
+    """
+    Approximation for the Milky Way and LMC potentials, evolving in time as rigid bodies.
+    This "potential" is non-conservative, so only the force is implemented.
+    Implemented from the AGAMA script https://github.com/GalacticDynamics-Oxford/Agama/blob/c507fc3e703513ae4a41bb705e171a4d036754a8/py/example_lmc_mw_interaction.py
+    For interactive notebook implementation, see examples/mw_lmc.ipynb
+    Crucially, force field assumes we are in the non-inertial frame of the Milky Way.
+    Therefore, integration must be done in the non-inertial frame. 
+    This means the MW's reflex motion will be incorporated in all integrated velocity vectors
+    Must integrate from a negative time > -14_000 Myr ago to present day (t=0).
+    """
+    def __init__(self, units=None):
+        super().__init__(units,{'params':None})
+        root_dir = os.path.dirname(os.path.abspath(__file__))  # The directory of the current script
+        data_dir = os.path.join(root_dir, 'data/LMC_MW_potential')
+       
+        MW_motion_dict = jnp.load(os.path.join(data_dir, 'MW_motion_dict.npy'), allow_pickle=True).item()
+        LMC_motion_dict = jnp.load(os.path.join(data_dir, 'LMC_motion_dict.npy'), allow_pickle=True).item()
+        
+        # LMC spatial track
+        self.LMC_x = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,0], method='cubic2')
+        self.LMC_y = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,1], method='cubic2')
+        self.LMC_z = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,2], method='cubic2')
+
+        # MW velocity track
+        self.velocity_func_x = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,3], method='cubic2')
+        self.velocity_func_y = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,4], method='cubic2')
+        self.velocity_func_z = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,5], method='cubic2')
+
+        # Create a simple but realistic model of the Milky Way with a bulge, a single disk,
+        # and a spherical dark halo
+        paramBulge = dict(
+            type              = 'Spheroid',
+            mass              = 1.2e10,
+            scaleRadius       = 0.2,
+            outerCutoffRadius = 1.8,
+            gamma             = 0.0,
+            beta              = 1.8)
+        paramDisk  = dict(
+            type='MiyamotoNagai',
+            mass              = 5.0e10,
+            scaleRadius       = 3.0,
+            scaleHeight       = 0.3)
+        paramHalo  = dict(
+            type              = 'Spheroid',
+            densityNorm       = 1.35e7,
+            scaleRadius       = 14,
+            outerCutoffRadius = 300,
+            cutoffStrength    = 4,
+            gamma             = 1,
+            beta              = 3)
+
+        # LMC params
+        # Mass in spheroid is _total mass_
+        massLMC    = 1.5e11
+        radiusLMC  = (massLMC/1e11)**0.6 * 8.5
+        paramLMC = dict(
+            type              = 'spheroid',
+            mass              = massLMC,
+            scaleRadius       = radiusLMC,
+            outerCutoffRadius = radiusLMC*10,
+            gamma             = 1,
+            beta              = 3
+            )
+            
+        # Create the Milky Way model
+        pot_bulge = AGAMA_Spheroid(**paramBulge)
+        pot_disk = MiyamotoNagaiDisk(m=paramDisk['mass'], a=paramDisk['scaleRadius'], b=paramDisk['scaleHeight'], units=units)
+        pot_halo = AGAMA_Spheroid(**paramHalo)
+        pot_MW_lst = [pot_bulge, pot_disk, pot_halo]
+        self.pot_MW = Potential_Combine(pot_MW_lst, units=units)
+        # Create the LMC model
+        self.pot_LMC = AGAMA_Spheroid(**paramLMC)
+        self.translating_LMC_pot = TimeDepTranslatingPotential(pot=self.pot_LMC, center_spl=self.LMC_center_spline,units=units)
+        # Uniform acceleration: we will assume integration in the *non-intertial* frame of the MW
+        # Uniform acceleration is the negative of the derivative of the MW velocity function (MW's velocity track in intertial frame)
+        self.unif_acc = UniformAcceleration(velocity_func=self.MW_velocity_func,units=units)
+        pot_total_lst = [self.pot_MW, self.translating_LMC_pot, self.unif_acc]
+        self.total_pot = Potential_Combine(pot_total_lst, units=units)
+        
+        self.gradient = self.total_pot.gradient
+        self.acceleration = self.total_pot.acceleration
+
+
+    @partial(jax.jit,static_argnums=(0,))
+    def LMC_center_spline(self,t):
+        return jnp.array([self.LMC_x(t), self.LMC_y(t), self.LMC_z(t)])
+        
+    @partial(jax.jit,static_argnums=(0,))
+    def MW_velocity_func(self,t):
+        return jnp.array([self.velocity_func_x(t), self.velocity_func_y(t), self.velocity_func_z(t)])
+
+    @partial(jax.jit,static_argnums=(0,))
+    def potential(self, xyz, t):
+        # Raise error with message
+        raise NotImplementedError("Potential not implemented, force is non-conservative")
+
+ 
+
 
 
 ########################## SUBHALOS ###########################

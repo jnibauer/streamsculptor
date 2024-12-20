@@ -263,7 +263,7 @@ class MW_LMC_field:
     # this script from AGAMA: 
     # https://github.com/GalacticDynamics-Oxford/Agama/blob/c507fc3e703513ae4a41bb705e171a4d036754a8/py/example_lmc_mw_interaction.py
     # Treat the MW and LMC as rigid body potentials.
-    # Evolve the centroid of each in response to the other, with Chandrasekar dynamical friction for the LMC.
+    # Evolve the centroid of each in response to the other, with Chandrasekhar dynamical friction for the LMC.
     # sigma_func is the velocity dispersion function of the MW at the LMC position [sigma_func(xyz) = scalar].
     def __init__(self, pot_MW=None, pot_LMC=None, sigma_func=None, bminCouLog=None):
         self.pot_MW = pot_MW

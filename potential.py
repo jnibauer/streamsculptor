@@ -281,6 +281,30 @@ class TimeDepTranslatingPotential(Potential):
         xyz_adjust = xyz - center
         return self.pot.potential(xyz_adjust,t)
 
+class UniformAcceleration(Potential):
+    """
+    Spatially uniform acceleration field
+    """
+    def __init__(self, velocity_func=None, units=None):
+        """
+        velocity_func: spline function that takes a single argument [time] and returns a 3d vector [vx,vy,vz] in kpc/Myr
+        Derivative of this function is the acceleration of the frame
+        Minus the derivative is the exterted spatially uniform acceleration
+        """
+        super().__init__(units,{'velocity_func':velocity_func})
+        #self.gradient = gradient
+        #self.acceleration = acceleration
+
+    @partial(jax.jit,static_argnums=(0,))
+    def potential(self,xyz, t):
+        raise NotImplementedError
+    @partial(jax.jit,static_argnums=(0,))
+    def gradient(self,xyz,t):
+        return jax.jacfwd(self.velocity_func)(t)
+    @partial(jax.jit,static_argnums=(0,))
+    def acceleration(self,xyz,t):
+        return -self.gradient(xyz, t)
+    
 
 
 ########################## SUBHALOS ###########################
@@ -418,3 +442,4 @@ class Potential_Combine(Potential):
         for i in range(len(self.potential_list)):
             output.append(self.potential_list[i].gradient(xyz,t))
         return jnp.sum( jnp.array(output), axis = 0)
+

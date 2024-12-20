@@ -71,7 +71,7 @@ class AGAMA_Spheroid(Potential):
        
     @partial(jax.jit, static_argnums=(0,))
     def solve_for_rho0_from_mass(self):
-        r_grid = jnp.logspace(-5,jnp.log10(2*self.outerCutoffRadius),1000)
+        r_grid = jnp.logspace(-5,jnp.log10(5*self.outerCutoffRadius),10_000)
         #stack the 1d array so we have 3d array with r_grid along x, zeros otherwise
         zeros = jnp.zeros_like(r_grid)[:,None]
         inp = jnp.hstack([r_grid[:, None], zeros, zeros])

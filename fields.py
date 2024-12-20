@@ -259,13 +259,41 @@ class MassRadiusPerturbation_Interp:
 
 
 class MW_LMC_field:
-    def __init__(self, pot_MW=None, pot_LMC=None):
+    # The following field is based entirely on 
+    # this script from AGAMA: 
+    # https://github.com/GalacticDynamics-Oxford/Agama/blob/c507fc3e703513ae4a41bb705e171a4d036754a8/py/example_lmc_mw_interaction.py
+    # Treat the MW and LMC as rigid body potentials.
+    # Evolve the centroid of each in response to the other, with Chandrasekar dynamical friction for the LMC.
+    # sigma_func is the velocity dispersion function of the MW at the LMC position [sigma_func(xyz) = scalar].
+    def __init__(self, pot_MW=None, pot_LMC=None, sigma_func=None, bminCouLog=None):
         self.pot_MW = pot_MW
         self.pot_LMC = pot_LMC
+        self.sigma_func = sigma_func
+        self.bminCouLog = bminCouLog
+        self.massLMC = pot_LMC.mass
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def term(self, t, coords, args):
+        x0, v0 = coords[0][:3], coords[0][3:] # MW position and velocity
+        x1, v1 = coords[1][:3], coords[1][3:] # LMC position and velocity
+        dx = x1 - x0 # relative position – from MW center
+        dv = v1 - v0 # relative velocity - from MW center
+        dist = jnp.sum(dx**2)**0.5
+        vmag = jnp.sum(dv**2)**0.5
+        f0 = self.pot_LMC.acceleration(-dx,t) # force from LMC on MW center
+        f1 = self.pot_MW.acceleration(dx,t) # force from MW on LMC
+        rho = self.pot_MW.density(dx,t) # MW density at LMC position
+        sigma = self.sigma_func(dist) # velocity dispersion of MW at LMC position
 
-    @partial(jax.jit,static_argnums=(0,))
-    def term(self,t, coords, args):
-        x_MW, v_MW = coords[0][:3], coords[0][3:]
-        x_LMC, v_LMC = coords[1][:3], coords[1][3:]
-        ## FILL IN the rest
-        raise NotImplementedError
+        # distance-dependent Coulomb logarithm
+        # (an approximation that best matches the results of N-body simulations)
+        couLog = jnp.maximum(0.0, jnp.log(dist/self.bminCouLog)**0.5)
+        X = vmag / (sigma * 2**0.5)
+        drag  = -(4*jnp.pi * rho * dv / vmag *
+        (jax.lax.erf(X) - 2/jnp.pi**.5 * X * jnp.exp(-X*X)) *
+        self.massLMC * self.pot_MW._G**2 / vmag**2 * couLog)   # dynamical friction force
+        
+        force_on_MW = f0
+        force_on_LMC = f1 + drag
+        return [jnp.hstack([v0, force_on_MW]), jnp.hstack([v1, force_on_LMC])]
+

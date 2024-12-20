@@ -283,7 +283,6 @@ class TimeDepTranslatingPotential(Potential):
 
 
 
-
 ########################## SUBHALOS ###########################
 
 class SubhaloLinePotential(Potential):

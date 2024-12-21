@@ -312,14 +312,19 @@ class UniformAcceleration(Potential):
 
 class MW_LMC_Potential(Potential):
     """
+    This potential is implemented from the AGAMA script: https://github.com/GalacticDynamics-Oxford/Agama/blob/c507fc3e703513ae4a41bb705e171a4d036754a8/py/example_lmc_mw_interaction.py
     Approximation for the Milky Way and LMC potentials, evolving in time as rigid bodies.
     This "potential" is non-conservative, so only the force is implemented.
-    Implemented from the AGAMA script https://github.com/GalacticDynamics-Oxford/Agama/blob/c507fc3e703513ae4a41bb705e171a4d036754a8/py/example_lmc_mw_interaction.py
+    The LMC experiences chandrasekhar dynamical friction, with a spatially dependent drag force (velocity dispersion compute form MW potential using AGAMA)
     For interactive notebook implementation, see examples/mw_lmc.ipynb
     Crucially, force field assumes we are in the non-inertial frame of the Milky Way.
     Therefore, integration must be done in the non-inertial frame. 
     This means the MW's reflex motion will be incorporated in all integrated velocity vectors
     Must integrate from a negative time > -14_000 Myr ago to present day (t=0).
+
+    Caution: all splines are C2 (i.e., twice differentiable). Only a single round of automatic diffrentation should be applied 
+    to orbits in this potential. 
+    TODO: use higher-order splines.
     """
     def __init__(self, units=None):
         super().__init__(units,{'params':None})
@@ -363,7 +368,6 @@ class MW_LMC_Potential(Potential):
             beta              = 3)
 
         # LMC params
-        # Mass in spheroid is _total mass_
         massLMC    = 1.5e11
         radiusLMC  = (massLMC/1e11)**0.6 * 8.5
         paramLMC = dict(

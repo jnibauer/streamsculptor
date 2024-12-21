@@ -412,7 +412,17 @@ class MW_LMC_Potential(Potential):
         raise NotImplementedError("Potential not implemented, force is non-conservative")
 
  
-
+class CustomPotential(Potential):
+    """
+    Class to define a custom potential function
+    potential_func must take arguments (xyz, t) and return a scalar potential value
+    --> def potential_func(xyz, t):
+    -->     potential_value = ...   
+    -->     return potential_value
+    """
+    def __init__(self, potential_func=None, units=None):
+        super().__init__(units,{'potential_func':potential_func})
+        self.potential = self.potential_func
 
 
 ########################## SUBHALOS ###########################

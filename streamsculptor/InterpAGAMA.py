@@ -9,12 +9,9 @@ import jax
 import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 
-import jax.random as random 
-from jax_cosmo.scipy.interpolate import InterpolatedUnivariateSpline
 from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTerminatingEvent, DirectAdjoint, RecursiveCheckpointAdjoint, ConstantStepSize, Euler, StepTo
 import diffrax
 import equinox as eqx
-from jax.scipy import special
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
 from streamsculptor import Potential
 # Necessary for the interpolation

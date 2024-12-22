@@ -1,0 +1,12 @@
+agama==1.0
+astropy==7.0.0
+diffrax==0.6.1
+equinox==0.11.10
+gala==1.9.1
+interpax==0.3.4
+jax==0.4.35
+jax_cosmo==0.1.0
+jaxopt==0.8.3
+numpy==2.2.1
+optax==0.2.4
+streamsculptor==0.0.0

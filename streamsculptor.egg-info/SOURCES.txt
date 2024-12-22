@@ -20,5 +20,6 @@ streamsculptor/data/LMC_MW_potential/sigma_func_dict.npy
 streamsculptor/examples/OrphanChenab_mw_lmc_example.ipynb
 streamsculptor/examples/StreamSubhaloExample.ipynb
 streamsculptor/examples/custom_potential.ipynb
+streamsculptor/examples/dynamical_friction_ CustomTerm.ipynb
 streamsculptor/examples/mw_lmc_setup.ipynb
 streamsculptor/examples/tests.ipynb

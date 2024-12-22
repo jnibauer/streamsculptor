@@ -142,6 +142,7 @@ def gen_stream_scan_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=Non
     return lead_arm, trail_arm
 
 
+
 @jax.jit
 def custom_release_model(pos_prog=None, vel_prog=None, pos_rel=None, vel_rel=None):
     """

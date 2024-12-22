@@ -59,7 +59,16 @@ class Potential:
     def jacobian_force_mw(self, xyz, t):
         jacobian_force_mw = jax.jacfwd(self.gradient)
         return jacobian_force_mw(xyz, t)
-    
+
+    @partial(jax.jit,static_argnums=(0,))
+    def dphidr(self, x, t):
+        """
+        Radial derivative of the potential
+        """
+        rad = jnp.linalg.norm(x)
+        r_hat = x/rad
+        return jnp.sum(self.gradient(x,t)*r_hat)
+
     @partial(jax.jit,static_argnums=(0,))
     def d2phidr2_mw(self, x, t):
         """

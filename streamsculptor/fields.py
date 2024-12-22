@@ -295,3 +295,20 @@ class MW_LMC_field:
         force_on_LMC = f1 + drag
         return [jnp.hstack([v0, force_on_MW]), jnp.hstack([v1, force_on_LMC])]
 
+class CustomField:
+    """
+    - Custom field. User must define a function: term(t, coords, args).
+    - term(t, coords, args) outputs a pytree of same shape as coords.
+    - coords: list of arrays. Each array is a different coordinate in the field.
+    - args: dictionary of additional arguments.
+    ----------------------------------------------------------------
+    Physically, term specifies an update rule for coords.
+    For instance, in the case of orbit integration, term(t, coords, args) would
+    output the time derivative of the position and velocity coordinates (i.e., velocity and acceleration).
+    ----------------------------------------------------------------
+    """
+    def __init__(self, term=None):
+        self.term = term
+    @partial(jax.jit, static_argnums=(0,))
+    def term(self, t, coords, args):
+        return self.term(t, coords, args)

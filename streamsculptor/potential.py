@@ -17,8 +17,8 @@ import equinox as eqx
 from jax.scipy import special
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
 
-from StreamSculptor import Potential
-from InterpAGAMA import AGAMA_Spheroid
+from streamsculptor import Potential
+from .InterpAGAMA import AGAMA_Spheroid
 import interpax
 import os
 
@@ -328,11 +328,11 @@ class MW_LMC_Potential(Potential):
     """
     def __init__(self, units=None):
         super().__init__(units,{'params':None})
-        root_dir = os.path.dirname(os.path.abspath(__file__))  # The directory of the current script
-        data_dir = os.path.join(root_dir, 'data/LMC_MW_potential')
-       
-        MW_motion_dict = jnp.load(os.path.join(data_dir, 'MW_motion_dict.npy'), allow_pickle=True).item()
-        LMC_motion_dict = jnp.load(os.path.join(data_dir, 'LMC_motion_dict.npy'), allow_pickle=True).item()
+        # Load the data for MW and LMC motion
+        data_path_MW = os.path.join(os.path.dirname(__file__), 'data/LMC_MW_potential', 'MW_motion_dict.npy')
+        data_path_LMC = os.path.join(os.path.dirname(__file__), 'data/LMC_MW_potential', 'LMC_motion_dict.npy')
+        MW_motion_dict = jnp.load(data_path_MW, allow_pickle=True).item()
+        LMC_motion_dict = jnp.load(data_path_LMC, allow_pickle=True).item()
         
         # LMC spatial track
         self.LMC_x = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,0], method='cubic2')

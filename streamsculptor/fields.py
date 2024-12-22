@@ -15,9 +15,9 @@ from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTe
 import diffrax
 import equinox as eqx
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
-from StreamSculptor import Potential
-from StreamSculptor import eval_dense_stream_id
-import potential
+from streamsculptor import Potential
+from streamsculptor import eval_dense_stream_id
+from streamsculptor import potential
 
 """
 Not all integrations are hamiltonian. fields.py allows for the integration

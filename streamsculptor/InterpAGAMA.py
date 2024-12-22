@@ -16,7 +16,7 @@ import diffrax
 import equinox as eqx
 from jax.scipy import special
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
-from StreamSculptor import Potential
+from streamsculptor import Potential
 # Necessary for the interpolation
 import agama
 import interpax

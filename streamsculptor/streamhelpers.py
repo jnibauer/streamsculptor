@@ -49,8 +49,8 @@ def eval_dense_stream_id(time=None, interp_func=None, idx=None, lead=True):
     
     return jax.lax.cond(lead, lead_func, trail_func)
 
-@partial(jax.jit,static_argnums=(0,1,6))
-def gen_stream_ics_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'),kval_arr=1.0,**kwargs):
+@partial(jax.jit,static_argnums=(0,1,6,8))
+def gen_stream_ics_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'),kval_arr=1.0,max_steps=10_000,**kwargs):
     """
     Generate stream initial conditions for the case of direct impacts or near misses with massive subhalos.
     This function exists purely for numerical reasons: when computing the particle spray release function,
@@ -63,7 +63,7 @@ def gen_stream_ics_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msa
     pot_total_lst = [pot_base, pot_pert]
     pot_total = potential.Potential_Combine(potential_list=pot_total_lst, units=usys)
     # Integrate progenitor in full potential, base + perturbation
-    ws_jax = pot_total.integrate_orbit(w0=prog_w0,ts=ts,solver=solver, **kwargs).ys
+    ws_jax = pot_total.integrate_orbit(w0=prog_w0,ts=ts,solver=solver,max_steps=max_steps, **kwargs).ys
     Msat = Msat*jnp.ones(len(ts))
     
     def scan_fun(carry, t):
@@ -78,15 +78,15 @@ def gen_stream_ics_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msa
     pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = all_states
     return pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr
 
-@partial(jax.jit,static_argnums=((0,1,6)))
-def gen_stream_vmapped_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'), kval_arr=1.0, **kwargs):
+@partial(jax.jit,static_argnums=((0,1,6,8)))
+def gen_stream_vmapped_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'), kval_arr=1.0,max_steps=10_000, **kwargs):
     """
     Generate perturbed stream with vmap. Better for GPU usage.
     """
-    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = gen_stream_ics_pert(pot_base=pot_base, pot_pert=pot_pert, ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver,kval_arr=kval_arr,**kwargs)
+    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = gen_stream_ics_pert(pot_base=pot_base, pot_pert=pot_pert, ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver,kval_arr=kval_arr,max_steps=max_steps,**kwargs)
     pot_total_lst = [pot_base, pot_pert]
     pot_total = potential.Potential_Combine(potential_list=pot_total_lst, units=usys)
-    orb_integrator = lambda w0, ts: pot_total.integrate_orbit(w0=w0, ts=ts, solver=solver, **kwargs).ys[-1]
+    orb_integrator = lambda w0, ts: pot_total.integrate_orbit(w0=w0, ts=ts, solver=solver,max_steps=max_steps, **kwargs).ys[-1]
     orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
     @jax.jit
     def single_particle_integrate(particle_number,pos_close_curr,pos_far_curr,vel_close_curr,vel_far_curr):
@@ -108,15 +108,15 @@ def gen_stream_vmapped_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=
     vel_far_arr[:-1])
 
 
-@partial(jax.jit,static_argnums=((0,1,6)))
-def gen_stream_scan_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded') ,kval_arr=1.0, **kwargs):
+@partial(jax.jit,static_argnums=((0,1,6,8)))
+def gen_stream_scan_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded') ,kval_arr=1.0, max_steps=10_000, **kwargs):
     """
     Generate perturbed stream with scan. Better for CPU usage.
     """
-    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = gen_stream_ics_pert(pot_base=pot_base, pot_pert=pot_pert, ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver,kval_arr=kval_arr, **kwargs)
+    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = gen_stream_ics_pert(pot_base=pot_base, pot_pert=pot_pert, ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver,kval_arr=kval_arr,max_steps=max_steps, **kwargs)
     pot_total_lst = [pot_base, pot_pert]
     pot_total = potential.Potential_Combine(potential_list=pot_total_lst, units=usys)
-    orb_integrator = lambda w0, ts: pot_total.integrate_orbit(w0=w0, ts=ts, solver=solver, **kwargs).ys[-1]
+    orb_integrator = lambda w0, ts: pot_total.integrate_orbit(w0=w0, ts=ts, solver=solver, max_steps=max_steps, **kwargs).ys[-1]
     orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
 
     @jax.jit

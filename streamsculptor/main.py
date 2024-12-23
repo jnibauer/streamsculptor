@@ -56,9 +56,12 @@ class Potential:
         return jnp.sqrt( r*dphi_dr )
    
     @partial(jax.jit,static_argnums=(0,))
-    def jacobian_force_mw(self, xyz, t):
-        jacobian_force_mw = jax.jacfwd(self.gradient)
-        return jacobian_force_mw(xyz, t)
+    def jacobian_force(self, xyz, t):
+        """
+        from https://github.com/undark-lab/sstrax
+        """
+        jacobian_force = jax.jacfwd(self.gradient)
+        return jacobian_force(xyz, t)
 
     @partial(jax.jit,static_argnums=(0,))
     def dphidr(self, x, t):
@@ -70,9 +73,10 @@ class Potential:
         return jnp.sum(self.gradient(x,t)*r_hat)
 
     @partial(jax.jit,static_argnums=(0,))
-    def d2phidr2_mw(self, x, t):
+    def d2phidr2(self, x, t):
         """
         Second radial derivative of the potential
+        from https://github.com/undark-lab/sstrax
         """
         rad = jnp.linalg.norm(x)
         r_hat = x/rad
@@ -83,39 +87,24 @@ class Potential:
     @partial(jax.jit,static_argnums=(0,))
     def omega(self, x,v):
         """
-        Computes the magnitude of the angular momentum in the simulation frame
-        Args:
-          x: 3d position (x, y, z) in [kpc]
-          v: 3d velocity (v_x, v_y, v_z) in [kpc/Myr]
-        Returns:
-          Magnitude of angular momentum in [rad/Myr]
-        Examples
-        --------
-        >>> omega(x=jnp.array([8.0, 0.0, 0.0]), v=jnp.array([8.0, 0.0, 0.0]))
+        Computes angular velocity 
+        from https://github.com/undark-lab/sstrax
         """
         rad = jnp.sqrt(x[0] ** 2 + x[1] ** 2 + x[2] ** 2)
         omega_vec = jnp.cross(x, v) / (rad**2)
         return jnp.linalg.norm(omega_vec)
 
     @partial(jax.jit,static_argnums=(0,))
-    def tidalr_mw(self, x, v, Msat, t):
+    def tidalr(self, x, v, Msat, t):
         """
-        Computes the tidal radius of a cluster in the potential
-        Args:
-          x: 3d position (x, y, z) in [kpc]
-          v: 3d velocity (v_x, v_y, v_z) in [kpc/Myr]
-          Msat: Cluster mass in [Msol]
-        Returns:
-          Tidal radius of the cluster in [kpc]
-        Examples
-        --------
-        >>> tidalr_mw(x=jnp.array([8.0, 0.0, 0.0]), v=jnp.array([8.0, 0.0, 0.0]), Msat=1e4)
+        Computes the tidal radius of a cluster
+        from https://github.com/undark-lab/sstrax
         """
-        return (self._G * Msat / ( self.omega(x, v) ** 2 - self.d2phidr2_mw(x, t)) ) ** (1.0 / 3.0)
+        return (self._G * Msat / ( self.omega(x, v) ** 2 - self.d2phidr2(x, t)) ) ** (1.0 / 3.0)
     
     @partial(jax.jit,static_argnums=(0,))
     def lagrange_pts(self,x,v,Msat, t):
-        r_tidal = self.tidalr_mw(x,v,Msat, t)
+        r_tidal = self.tidalr(x,v,Msat, t)
         r_hat = x/jnp.linalg.norm(x)
         L_close = x - r_hat*r_tidal
         L_far = x + r_hat*r_tidal
@@ -206,7 +195,7 @@ class Potential:
         
         r = jnp.linalg.norm(x)
         r_hat = x/r
-        r_tidal = self.tidalr_mw(x,v,Msat, t)
+        r_tidal = self.tidalr(x,v,Msat, t)
         rel_v = omega_val*r_tidal #relative velocity
         
         #circlar_velocity

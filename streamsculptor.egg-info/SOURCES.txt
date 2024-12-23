@@ -21,5 +21,7 @@ streamsculptor/examples/OrphanChenab_mw_lmc_example.ipynb
 streamsculptor/examples/StreamSubhaloExample.ipynb
 streamsculptor/examples/custom_potential.ipynb
 streamsculptor/examples/dynamical_friction_ CustomTerm.ipynb
+streamsculptor/examples/higher_order_variationalEqn.ipynb
+streamsculptor/examples/integrate_orbit_batch.ipynb
 streamsculptor/examples/mw_lmc_setup.ipynb
 streamsculptor/examples/tests.ipynb

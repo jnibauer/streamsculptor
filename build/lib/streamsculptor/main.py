@@ -56,9 +56,12 @@ class Potential:
         return jnp.sqrt( r*dphi_dr )
    
     @partial(jax.jit,static_argnums=(0,))
-    def jacobian_force_mw(self, xyz, t):
-        jacobian_force_mw = jax.jacfwd(self.gradient)
-        return jacobian_force_mw(xyz, t)
+    def jacobian_force(self, xyz, t):
+        """
+        from https://github.com/undark-lab/sstrax
+        """
+        jacobian_force = jax.jacfwd(self.gradient)
+        return jacobian_force(xyz, t)
 
     @partial(jax.jit,static_argnums=(0,))
     def dphidr(self, x, t):
@@ -70,9 +73,10 @@ class Potential:
         return jnp.sum(self.gradient(x,t)*r_hat)
 
     @partial(jax.jit,static_argnums=(0,))
-    def d2phidr2_mw(self, x, t):
+    def d2phidr2(self, x, t):
         """
         Second radial derivative of the potential
+        from https://github.com/undark-lab/sstrax
         """
         rad = jnp.linalg.norm(x)
         r_hat = x/rad
@@ -83,39 +87,24 @@ class Potential:
     @partial(jax.jit,static_argnums=(0,))
     def omega(self, x,v):
         """
-        Computes the magnitude of the angular momentum in the simulation frame
-        Args:
-          x: 3d position (x, y, z) in [kpc]
-          v: 3d velocity (v_x, v_y, v_z) in [kpc/Myr]
-        Returns:
-          Magnitude of angular momentum in [rad/Myr]
-        Examples
-        --------
-        >>> omega(x=jnp.array([8.0, 0.0, 0.0]), v=jnp.array([8.0, 0.0, 0.0]))
+        Computes angular velocity 
+        from https://github.com/undark-lab/sstrax
         """
         rad = jnp.sqrt(x[0] ** 2 + x[1] ** 2 + x[2] ** 2)
         omega_vec = jnp.cross(x, v) / (rad**2)
         return jnp.linalg.norm(omega_vec)
 
     @partial(jax.jit,static_argnums=(0,))
-    def tidalr_mw(self, x, v, Msat, t):
+    def tidalr(self, x, v, Msat, t):
         """
-        Computes the tidal radius of a cluster in the potential
-        Args:
-          x: 3d position (x, y, z) in [kpc]
-          v: 3d velocity (v_x, v_y, v_z) in [kpc/Myr]
-          Msat: Cluster mass in [Msol]
-        Returns:
-          Tidal radius of the cluster in [kpc]
-        Examples
-        --------
-        >>> tidalr_mw(x=jnp.array([8.0, 0.0, 0.0]), v=jnp.array([8.0, 0.0, 0.0]), Msat=1e4)
+        Computes the tidal radius of a cluster
+        from https://github.com/undark-lab/sstrax
         """
-        return (self._G * Msat / ( self.omega(x, v) ** 2 - self.d2phidr2_mw(x, t)) ) ** (1.0 / 3.0)
+        return (self._G * Msat / ( self.omega(x, v) ** 2 - self.d2phidr2(x, t)) ) ** (1.0 / 3.0)
     
     @partial(jax.jit,static_argnums=(0,))
     def lagrange_pts(self,x,v,Msat, t):
-        r_tidal = self.tidalr_mw(x,v,Msat, t)
+        r_tidal = self.tidalr(x,v,Msat, t)
         r_hat = x/jnp.linalg.norm(x)
         L_close = x - r_hat*r_tidal
         L_far = x + r_hat*r_tidal
@@ -173,6 +162,42 @@ class Potential:
             adjoint=DirectAdjoint()
         )
         return solution
+
+    @partial(jax.jit,static_argnums=((0,3,4,5,6,7,8,9,16,17,18,19,)))
+    def integrate_orbit_batch_scan(self, w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,dt0=0.5,pcoeff=0.4, icoeff=0.3,dcoeff=0, factormin=.2,factormax=10.0,safety=0.9,steps=False,jump_ts=None,):
+        """
+        Integrate a batch of orbits using scan [best for CPU usage]
+        w0: shape (N,6) array of initial conditions
+        ts: array of saved times. Can eithe be 1D array (same for all trajectories), or N x M array, where M is the number of saved times for each trajectory
+        """
+        @jax.jit
+        def body(carry, t):
+            i = carry[0]
+            w0_curr = w0[i]
+            ts_curr = ts[i]
+            sol = self.integrate_orbit(w0=w0_curr,ts=ts_curr, dense=dense, solver=solver,rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps, t0=t0, t1=t1,dt0=dt0,pcoeff=pcoeff, icoeff=icoeff,dcoeff=dcoeff, factormin=factormin,factormax=factormax,safety=safety,steps=steps,jump_ts=jump_ts,)
+            return [i+1], sol #sol.y, ts
+        
+        if len(ts.shape) == 1:
+            ts = jnp.tile(ts,(w0.shape[0],1)) # broadcast ts to shape (N,M)
+    
+        init_carry = [0]
+        final_state, all_states = jax.lax.scan(body, init_carry, jnp.arange(len(w0)))
+        return all_states
+
+    @partial(jax.jit,static_argnums=((0,3,4,5,6,7,8,9,16,17,18,19,)))
+    def integrate_orbit_batch_vmapped(self, w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,dt0=0.5,pcoeff=0.4, icoeff=0.3,dcoeff=0, factormin=.2,factormax=10.0,safety=0.9,steps=False,jump_ts=None):
+        """
+        Integrate a batch of orbits using vmap [best for GPU usage]
+        w0: shape (N,6) array of initial conditions
+        ts: array of saved times. Can eithe be 1D array (same for all trajectories), or N x M array, where M is the number of saved times for each trajectory
+        """
+        if len(ts.shape) == 1:
+            ts = jnp.tile(ts,(w0.shape[0],1)) # broadcast ts to shape (N,M)
+        
+        integrator = lambda w0, ts: self.integrate_orbit(w0=w0,ts=ts, dense=dense, solver=solver,rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps, t0=t0, t1=t1,dt0=dt0,pcoeff=pcoeff, icoeff=icoeff,dcoeff=dcoeff, factormin=factormin,factormax=factormax,safety=safety,steps=steps,jump_ts=jump_ts,)
+        integrator_mapped = jax.vmap(integrator,in_axes=(0,0,))
+        return integrator_mapped(w0,ts)
         
 
    
@@ -206,7 +231,7 @@ class Potential:
         
         r = jnp.linalg.norm(x)
         r_hat = x/r
-        r_tidal = self.tidalr_mw(x,v,Msat, t)
+        r_tidal = self.tidalr(x,v,Msat, t)
         rel_v = omega_val*r_tidal #relative velocity
         
         #circlar_velocity

@@ -307,7 +307,7 @@ class CustomField:
     output the time derivative of the position and velocity coordinates (i.e., velocity and acceleration).
     ----------------------------------------------------------------
     """
-    def __init__(self, term):
+    def __init__(self, term=None):
         self.term = term
     @partial(jax.jit, static_argnums=(0,))
     def term(self, t, coords, args):

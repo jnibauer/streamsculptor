@@ -31,7 +31,7 @@ term function.
 """
 
 
-@partial(jax.jit,static_argnums=((2,3,4,10)))
+@eqx.filter_jit
 def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, args=None, rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, max_steps=1_000,jump_ts=None, backwards_int=False,t0=0.0, t1=0.0):
     """
     Integrate a trajectory on a field.
@@ -105,7 +105,7 @@ class hamiltonian_field:
     """
     def __init__(self, pot):
         self.pot = pot
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def term(self,t,xv,args):
         x, v = xv[:3], xv[3:]
         acceleration = -self.pot.gradient(x,t)
@@ -129,7 +129,7 @@ class Nbody_field:
         self.masses = masses
         self._G = jnp.array(G.decompose(units).value)
         self.eps = eps
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def term(self, t, xv, args):
         """
         xv: (N,6) array of positions and velocities
@@ -170,7 +170,7 @@ class MassRadiusPerturbation_OTF:
     """
     def __init__(self, perturbation_generator):
         self.pertgen = perturbation_generator
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def term(self,t, coords, args):
         """
         x0,v0: base position and velocity
@@ -221,7 +221,7 @@ class MassRadiusPerturbation_Interp:
     def __init__(self, perturbation_generator):
         self.pertgen = perturbation_generator
         self.base_stream = perturbation_generator.base_stream
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def term(self, t, coords, args):
         """
         args is a dictionary:  args['idx'] is the current particle index, and args['tail_bool'] specifies the stream arm
@@ -270,7 +270,7 @@ class MW_LMC_field:
         self.bminCouLog = bminCouLog
         self.massLMC = pot_LMC.mass
     
-    @partial(jax.jit, static_argnums=(0,))
+    @eqx.filter_jit
     def term(self, t, coords, args):
         x0, v0 = coords[0][:3], coords[0][3:] # MW position and velocity
         x1, v1 = coords[1][:3], coords[1][3:] # LMC position and velocity
@@ -309,6 +309,6 @@ class CustomField:
     """
     def __init__(self, term=None):
         self.term = term
-    @partial(jax.jit, static_argnums=(0,))
+    @eqx.filter_jit
     def term(self, t, coords, args):
         return self.term(t, coords, args)

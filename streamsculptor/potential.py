@@ -36,7 +36,7 @@ class LMCPotential(Potential):
         self.spl_z = InterpolatedUnivariateSpline(self.LMC_orbit['t'], self.LMC_orbit['z'],k=3)
 
     
-    @partial(jax.jit, static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self, xyz, t):
         LMC_pos = jnp.array([ self.spl_x(t), self.spl_y(t), self.spl_z(t) ])
         xyz_adjust = xyz - LMC_pos
@@ -53,7 +53,7 @@ class LMCPotential(Potential):
 class MiyamotoNagaiDisk(Potential):
     def __init__(self, m, a, b, units=None):
         super().__init__(units, {'m': m, 'a': a, 'b': b,})
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self,xyz,t):
         R2 = xyz[0]**2 + xyz[1]**2
         return -self._G*self.m / jnp.sqrt(R2 + jnp.square(jnp.sqrt(xyz[2]**2 + self.b**2) + self.a))
@@ -64,7 +64,7 @@ class NFWPotential(Potential):
     """
     def __init__(self, m, r_s, units=None):
         super().__init__(units, {'m': m, 'r_s': r_s})
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self,xyz,t):
         v_h2 = -self._G*self.m/self.r_s
         m = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 )/self.r_s ##removed softening! used to be .001 after xyz[2]**2
@@ -75,7 +75,7 @@ class Isochrone(Potential):
     def __init__(self, m, a, units=None):
         super().__init__(units, {'m': m, 'a': a})
     
-    @partial(jax.jit, static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self, xyz, t):
         r = jnp.linalg.norm(xyz, axis=0)
         return - self._G * self.m / (self.a + jnp.sqrt(r**2 + self.a**2))
@@ -83,7 +83,7 @@ class Isochrone(Potential):
 class PlummerPotential(Potential):
     def __init__(self, m, r_s, units=None):
         super().__init__(units, {'m': m, 'r_s': r_s})
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self,xyz,t):
         r_squared = xyz[0]**2 + xyz[1]**2 + xyz[2]**2
         return -self._G*self.m / jnp.sqrt(r_squared + self.r_s**2)
@@ -91,7 +91,7 @@ class PlummerPotential(Potential):
 class HernquistPotential(Potential):
     def __init__(self, m, r_s, units=None):
         super().__init__(units, {'m': m, 'r_s': r_s})
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self,xyz,t):
         r = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 + 0.00005)
         return -self._G*self.m / (r + self.r_s) 
@@ -106,7 +106,7 @@ class ProgenitorPotential(Potential):
     def __init__(self, m, r_s, interp_func, prog_pot, units=None):
         super().__init__(units, {'m': m, 'r_s': r_s, 'interp_func':interp_func, 'prog_pot':prog_pot})
         self.prog_pot = prog_pot(m=self.m,r_s=self.r_s,units=units)
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self,xyz,t):
         eval_pt = xyz - self.interp_func.evaluate(t)[:3]
         return self.prog_pot.potential(eval_pt,t)
@@ -122,7 +122,7 @@ class TimeDepProgenitorPotential(Potential):
     """
     def __init__(self, mass_spl, r_s_spl, interp_func, prog_pot, units=None):
         super().__init__(units, {'mass_spl': mass_spl, 'r_s_spl': r_s_spl, 'interp_func':interp_func, 'prog_pot':prog_pot})
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self,xyz,t):
         eval_pt = xyz - self.interp_func.evaluate(t)[:3]
         mass_curr = self.mass_spl(t)
@@ -141,7 +141,7 @@ class BarPotential(Potential):
     """
     def __init__(self, m, a, b, c, Omega, units=None):
         super().__init__(units, {'m': m, 'a': a, 'b': b, 'c': c, 'Omega': Omega})
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self,xyz,t):
         ## First take the simulation frame coordinates and rotate them by Omega*t
         ang = -self.Omega*t
@@ -159,7 +159,7 @@ class DehnenBarPotential(Potential):
     def __init__(self, alpha, v0, R0, Rb, phib, Omega, units=None):
         super().__init__(units, {'alpha':alpha,'v0':v0, 'R0':R0, 'Rb':Rb, 'phib':phib, 'Omega':Omega})
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self,xyz,t):
         phi = jnp.arctan2(xyz[1],xyz[0])
         R = jnp.sqrt(xyz[0]**2 + xyz[1]**2)
@@ -189,7 +189,7 @@ class PowerLawCutoffPotential(Potential):
         super().__init__(units, {'m':m,'alpha':alpha,'r_c':r_c})
         self.gradient = self.gradient_func
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self,xyz,t):
         r = jnp.sqrt(jnp.sum(xyz**2))
         tmp_0 = (1/2.)*self.alpha
@@ -201,7 +201,7 @@ class PowerLawCutoffPotential(Potential):
         tmp_6 = tmp_5*special.gammainc(tmp_2,tmp_4)*special.gamma(tmp_2)/(jnp.sqrt(tmp_3)*special.gamma(tmp_1 + 2.5))
         return tmp_0*tmp_6 - 3./2.0*tmp_6 + tmp_5*special.gammainc(tmp_1 + 1, tmp_4)*special.gamma(tmp_1 + 1)/(self.r_c*special.gamma(tmp_2))
     
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def gradient_func(self, xyz, t):
         r = jnp.sqrt(jnp.sum(xyz**2))
         dPhi_dr = (self._G*self.m/(r**2) * 
@@ -237,7 +237,7 @@ class GalaMilkyWayPotential(Potential):
         potential_list = [pot_disk,pot_bulge, pot_nucleus, pot_halo]
         self.pot = Potential_Combine(potential_list=potential_list,units=self.units)
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self, xyz,t):
         return self.pot.potential(xyz,t)
 
@@ -265,7 +265,7 @@ class BovyMWPotential2014(Potential):
         potential_list = [pot_disk,pot_bulge,pot_halo]
         self.pot = Potential_Combine(potential_list=potential_list,units=self.units)
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self, xyz,t):
         return self.pot.potential(xyz,t)
 
@@ -279,7 +279,7 @@ class TimeDepTranslatingPotential(Potential):
     def __init__(self, pot, center_spl, units=None):
         super().__init__(units,{'pot':pot, 'center_spl':center_spl})
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self, xyz, t):
         center = self.center_spl(t)
         xyz_adjust = xyz - center
@@ -299,13 +299,13 @@ class UniformAcceleration(Potential):
         #self.gradient = gradient
         #self.acceleration = acceleration
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self,xyz, t):
         raise NotImplementedError
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def gradient(self,xyz,t):
         return jax.jacfwd(self.velocity_func)(t)
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def acceleration(self,xyz,t):
         return -self.gradient(xyz, t)
     
@@ -398,15 +398,15 @@ class MW_LMC_Potential(Potential):
         self.acceleration = self.total_pot.acceleration
 
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def LMC_center_spline(self,t):
         return jnp.array([self.LMC_x(t), self.LMC_y(t), self.LMC_z(t)])
         
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def MW_velocity_func(self,t):
         return jnp.array([self.velocity_func_x(t), self.velocity_func_y(t), self.velocity_func_z(t)])
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self, xyz, t):
         # Raise error with message
         raise NotImplementedError("Potential not implemented, force is non-conservative")
@@ -433,11 +433,11 @@ class SubhaloLinePotential(Potential):
         'subhalo_t0':subhalo_t0, 't_window':t_window,})
     
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def single_subhalo_potential(self, xyz, m, a, t):
         return PlummerPotential(m=m, r_s=a,units=usys).potential(xyz,t) ##Was NFWPotential
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self,xyz, t):
         """
         xyz is where we want to evalaute the potential due to the ensemble of subhalos
@@ -457,7 +457,7 @@ class SubhaloLinePotential(Potential):
         pot_per_subhalo = vmapped_cond(pred,true_func,false_func, self.subhalo_x0, self.subhalo_v, self.subhalo_t0, self.m, self.a, t)#jax.lax.cond(pred, true_func, false_func)
         return jnp.sum(pot_per_subhalo)
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential_per_SH(self,xyz, t):
         """
         xyz is where we want to evalaute the potential due to the ensemble of subhalos
@@ -486,12 +486,12 @@ class SubhaloLinePotential_dRadius(Potential):
     For many structural parameters (multivariate) need to take a jacobian, but the same principle will apply.
     """
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def single_subhalo_potential(self, xyz, m, a, t):
         func = lambda m, r_s: PlummerPotential(m=m, r_s=r_s,units=usys).potential(xyz,t)
         return jax.grad(func,argnums=(1))(m, a) # returns gradient of potential with respect to scale radius. Output is still a 1d potential evaluation (scalar)
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self,xyz, t):
         """
         xyz is where we want to evalaute the potential due to the ensemble of subhalos
@@ -511,7 +511,7 @@ class SubhaloLinePotential_dRadius(Potential):
         pot_per_subhalo = vmapped_cond(pred,true_func,false_func, self.subhalo_x0, self.subhalo_v, self.subhalo_t0, self.m, self.a, t)#jax.lax.cond(pred, true_func, false_func)
         return jnp.sum(pot_per_subhalo)
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential_per_SH(self,xyz, t):
         """
         xyz is where we want to evalaute the potential due to the ensemble of subhalos
@@ -547,14 +547,14 @@ class Potential_Combine(Potential):
         super().__init__(units, {'potential_list': potential_list })
         self.gradient = self.gradient_func
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def potential(self, xyz, t,):
         output = []
         for i in range(len(self.potential_list)):
             output.append(self.potential_list[i].potential(xyz,t))
         return jnp.sum(jnp.array(output))
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def gradient_func(self, xyz, t,):
         output = []
         for i in range(len(self.potential_list)):

@@ -49,7 +49,7 @@ def eval_dense_stream_id(time=None, interp_func=None, idx=None, lead=True):
     
     return jax.lax.cond(lead, lead_func, trail_func)
 
-@partial(jax.jit,static_argnums=(0,1,6,8))
+@eqx.filter_jit
 def gen_stream_ics_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'),kval_arr=1.0,max_steps=10_000,**kwargs):
     """
     Generate stream initial conditions for the case of direct impacts or near misses with massive subhalos.
@@ -78,7 +78,7 @@ def gen_stream_ics_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msa
     pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = all_states
     return pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr
 
-@partial(jax.jit,static_argnums=((0,1,6,8)))
+@eqx.filter_jit
 def gen_stream_vmapped_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'), kval_arr=1.0,max_steps=10_000, **kwargs):
     """
     Generate perturbed stream with vmap. Better for GPU usage.
@@ -108,7 +108,7 @@ def gen_stream_vmapped_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=
     vel_far_arr[:-1])
 
 
-@partial(jax.jit,static_argnums=((0,1,6,8)))
+@eqx.filter_jit
 def gen_stream_scan_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded') ,kval_arr=1.0, max_steps=10_000, **kwargs):
     """
     Generate perturbed stream with scan. Better for CPU usage.

@@ -47,7 +47,7 @@ class RestrictedNbody_generator:
 
         self.pot_prog_curr = self.progenitor_potential(m=init_mass, r_s=init_rs, units=self.potential.units)
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def cost_func(self, params ,locs, t, inside_bool):
         mass_param, r_s_param = 10**params
         pot_prog_curr = self.progenitor_potential(m=mass_param, r_s=r_s_param, units=self.potential.units)
@@ -56,7 +56,7 @@ class RestrictedNbody_generator:
         log_like = -mass_param + jnp.sum(log_density)
         return -log_like
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def fit_monopole(self, x, t, inside_bool):
         """
         Approximate self gravity of the progenitor
@@ -73,7 +73,7 @@ class RestrictedNbody_generator:
         mass_left_bool = inside_bool.sum() > 0
         return jax.lax.cond(mass_left_bool, mass_left, dissolved)
 
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def get_params(self,t, coords, args):
         """
         coords: N_particles x 6
@@ -87,7 +87,7 @@ class RestrictedNbody_generator:
        
         return mass_fit, r_s_fit
     
-    @partial(jax.jit,static_argnums=(0,))
+    @eqx.filter_jit
     def term(self,t, coords, args):
         """
         coords: N_particles x 6
@@ -126,7 +126,7 @@ def integrate_restricted_Nbody(w0=None,ts=None, interrupt_ts=None,solver=diffrax
     mass_init: initial guess for progenitor mass
     r_s_init: initial guess for progenitor scale radius
     """
-    @jax.jit
+    @eqx.filter_jit
     def body_func(carry, idx):
         wcurr, tcurr, tstop, param_mass, param_rs =  carry
         ts_curr = jnp.array([tcurr, jnp.clip(tstop, -jnp.inf, ts[-1])])

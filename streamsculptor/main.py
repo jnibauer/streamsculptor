@@ -121,7 +121,7 @@ class Potential:
     #################### Orbit integrator ###########################
 
     @eqx.filter_jit
-    def integrate_orbit(self,w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,dt0=0.5,pcoeff=0.4, icoeff=0.3,dcoeff=0, factormin=.2,factormax=10.0,safety=0.9,steps=False,jump_ts=None,):
+    def integrate_orbit(self,w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,steps=False,jump_ts=None,):
         """
         Integrate orbit associated with potential function.
         w0: length 6 array [x,y,z,vx,vy,vz]
@@ -133,11 +133,7 @@ class Potential:
         max_steps: maximum number of allowed timesteps
         step_controller: 0 for PID (adaptive), 1 for constant timestep (must then specify dt0)
         """
-        
-        dt0_sign = jnp.sign(ts.max() - ts.min()) if t0 is None else jnp.sign(t1 - t0)
-        dt0 = dt0*dt0_sign
-
-       
+          
         term = ODETerm(self.velocity_acceleration)
         
         saveat = SaveAt(t0=False, t1=False,ts= ts if not dense else None,dense=dense, steps=steps)
@@ -154,7 +150,7 @@ class Potential:
             t0=ts.min() if t0 is None else t0,
             t1=ts.max() if t1 is None else t1,
             y0=w0,
-            dt0=dt0,
+            dt0=None,
             saveat=saveat,
             stepsize_controller=stepsize_controller,
             discrete_terminating_event=None,

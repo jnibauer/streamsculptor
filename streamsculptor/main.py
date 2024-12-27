@@ -141,7 +141,7 @@ class Potential:
         
         rtol: float = rtol  
         atol: float = atol  
-        stepsize_controller = PIDController(rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,safety=safety,force_dtmin=True, jump_ts=jump_ts)
+        stepsize_controller = PIDController(rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,force_dtmin=True, jump_ts=jump_ts)
         #max_steps: int = max_steps
         max_steps = int(max_steps)
         solution = diffeqsolve(

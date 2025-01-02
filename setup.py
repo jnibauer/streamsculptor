@@ -6,6 +6,7 @@ setup(
     package_data={
         'streamsculptor': [
             'data/LMC_MW_potential/*',  
+            'data/GD1_prog/*',
             'examples/*',  
         ],
     },

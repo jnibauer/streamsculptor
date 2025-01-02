@@ -17,6 +17,7 @@ streamsculptor.egg-info/top_level.txt
 streamsculptor/data/LMC_MW_potential/LMC_motion_dict.npy
 streamsculptor/data/LMC_MW_potential/MW_motion_dict.npy
 streamsculptor/data/LMC_MW_potential/sigma_func_dict.npy
+streamsculptor/examples/GD1_and_SubhaloFitting_GPU.ipynb
 streamsculptor/examples/OrphanChenab_mw_lmc_example.ipynb
 streamsculptor/examples/StreamSubhaloExample.ipynb
 streamsculptor/examples/custom_potential.ipynb

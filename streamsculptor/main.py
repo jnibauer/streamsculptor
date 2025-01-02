@@ -131,7 +131,6 @@ class Potential:
         rtol, atol: tolerance for PIDController, adaptive timestep
         dtmin: minimum timestep (in Myr)
         max_steps: maximum number of allowed timesteps
-        step_controller: 0 for PID (adaptive), 1 for constant timestep (must then specify dt0)
         """
           
         term = ODETerm(self.velocity_acceleration)
@@ -160,7 +159,7 @@ class Potential:
         return solution
 
     @eqx.filter_jit
-    def integrate_orbit_batch_scan(self, w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,dt0=0.5,pcoeff=0.4, icoeff=0.3,dcoeff=0, factormin=.2,factormax=10.0,safety=0.9,steps=False,jump_ts=None,):
+    def integrate_orbit_batch_scan(self, w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,steps=False,jump_ts=None,):
         """
         Integrate a batch of orbits using scan [best for CPU usage]
         w0: shape (N,6) array of initial conditions
@@ -170,31 +169,32 @@ class Potential:
         def body(carry, t):
             i = carry[0]
             w0_curr = w0[i]
-            ts_curr = ts[i]
-            sol = self.integrate_orbit(w0=w0_curr,ts=ts_curr, dense=dense, solver=solver,rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps, t0=t0, t1=t1,dt0=dt0,pcoeff=pcoeff, icoeff=icoeff,dcoeff=dcoeff, factormin=factormin,factormax=factormax,safety=safety,steps=steps,jump_ts=jump_ts,)
-            return [i+1], sol #sol.y, ts
-        
-        if len(ts.shape) == 1:
-            ts = jnp.tile(ts,(w0.shape[0],1)) # broadcast ts to shape (N,M)
+            ts_curr = ts if len(ts.shape) == 1 else ts[i]
+            sol = self.integrate_orbit(w0=w0_curr,ts=ts_curr, dense=dense, solver=solver,rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps, t0=t0, t1=t1, steps=steps,jump_ts=jump_ts,)
+            return [i+1], sol 
     
         init_carry = [0]
         final_state, all_states = jax.lax.scan(body, init_carry, jnp.arange(len(w0)))
         return all_states
 
     @eqx.filter_jit
-    def integrate_orbit_batch_vmapped(self, w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,dt0=0.5,pcoeff=0.4, icoeff=0.3,dcoeff=0, factormin=.2,factormax=10.0,safety=0.9,steps=False,jump_ts=None):
+    def integrate_orbit_batch_vmapped(self, w0=None, ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-7, atol=1e-7, dtmin=0.3, dtmax=None, max_steps=10_000, t0=None, t1=None, steps=False, jump_ts=None):
         """
         Integrate a batch of orbits using vmap [best for GPU usage]
         w0: shape (N,6) array of initial conditions
-        ts: array of saved times. Can eithe be 1D array (same for all trajectories), or N x M array, where M is the number of saved times for each trajectory
+        ts: array of saved times. Can either be 1D array (same for all trajectories), or N x M array, where M is the number of saved times for each trajectory
         """
+        integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts, dense=dense, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax, max_steps=max_steps, t0=t0, t1=t1, steps=steps, jump_ts=jump_ts)
+        
         if len(ts.shape) == 1:
-            ts = jnp.tile(ts,(w0.shape[0],1)) # broadcast ts to shape (N,M)
+            func = lambda w0: integrator(w0, ts)
+            integrator_mapped = jax.vmap(func, in_axes=(0,))
+        else:
+            func = jax.vmap(integrator, in_axes=(0, 0))
+            integrator_mapped = lambda w0: func(w0, ts)
         
-        integrator = lambda w0, ts: self.integrate_orbit(w0=w0,ts=ts, dense=dense, solver=solver,rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps, t0=t0, t1=t1,dt0=dt0,pcoeff=pcoeff, icoeff=icoeff,dcoeff=dcoeff, factormin=factormin,factormax=factormax,safety=safety,steps=steps,jump_ts=jump_ts,)
-        integrator_mapped = jax.vmap(integrator,in_axes=(0,0,))
-        return integrator_mapped(w0,ts)
-        
+        return integrator_mapped(w0)
+            
 
    
     ################### Stream Model ######################

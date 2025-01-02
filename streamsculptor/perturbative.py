@@ -14,8 +14,8 @@ from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTe
 import diffrax
 import equinox as eqx
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
-import fields
-from fields import integrate_field
+from streamsculptor import fields
+from streamsculptor.fields import integrate_field
 from streamsculptor import custom_release_model
 from streamsculptor import Potential
 

@@ -18,8 +18,8 @@ import equinox as eqx
 import jaxopt
 import optax
 
-import fields
-from fields import integrate_field
+import streamsculptor import fields
+from streamsculptor.fields import integrate_field
 
 class RestrictedNbody_generator:
     def __init__(self, potential=None, progenitor_potential=None, interp_prog=None, init_mass=None, init_rs=None, r_esc=1.0, maxiter=250, lr=1e-3):

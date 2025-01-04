@@ -256,18 +256,10 @@ class MassRadiusPerturbation_Interp:
         return jnp.hstack([d_qdot_d_eps,d_pdot_d_eps, d_qalpha1dot_dtheta, d_palpha1dot_dtheta])
 
 
-<<<<<<< HEAD
-
-class MassRadiusPerturbation_OTF_SecondOrder:
-    """
-    Applying perturbation theory in the mass and radius of a 
-    subhalo potential. 
-=======
 class MassPerturbation_OTF_secondOrder:
     """
     Applying perturbation theory in the mass and radius of a 
     subhalo potential. Up to second order in mass perturbations.
->>>>>>> develop
     OTF = "On The Fly"
     The unperturbed orbits are computed in realtime, along
     with the perturbation equations. No pre-computation is utilized.
@@ -295,16 +287,6 @@ class MassPerturbation_OTF_secondOrder:
     @eqx.filter_jit
     def term(self,t, coords, args):
         """
-<<<<<<< HEAD
-        coords[0] contain x0,v0: base position and velocity [length 6]
-        coords[1] contain x1, v1, dx1_dtheta, dv1_dtheta: mass / structural perturbations in each coord [nSH x 12]
-        coords[2] contain x2, v2: second order mass perturbations in each coord [nSH x 6]
-        """
-        
-        x0, v0 = coords[0][:3], coords[0][3:]
-        x1, v1 = coords[1][:,:3], coords[1][:,3:6] # nSH x 3
-        dx1_dtheta, dv1_dtheta = coords[1][:,6:9], coords[1][:,9:] # nSH x 3
-=======
         x0,v0: base position and velocity
         x1, v1: mass perturbations in each coord
         dx1_dtheta, dv1_dtheta: second order mass*radius perturbations in each coord
@@ -312,7 +294,6 @@ class MassPerturbation_OTF_secondOrder:
         
         x0, v0 = coords[0][:3], coords[0][3:]
         x1, v1 = coords[1][:,:3], coords[1][:,3:] # nSH x 3
->>>>>>> develop
         x2, v2 = coords[2][:,:3], coords[2][:,3:] # nSH x 3
         
         a0 = self.pot_base.acceleration(x0, t) 
@@ -326,20 +307,6 @@ class MassPerturbation_OTF_secondOrder:
         term1 = jnp.einsum('ij,kj->ki', da_dx, x2) # nSH x 3
         inner_term2 = jnp.einsum('ikj,nk->nij', d2a_dx2, x1) # nSH x 3 x 3
         term2 = jnp.einsum('nj,nij->ni', x1, inner_term2) # nSH x 3
-<<<<<<< HEAD
-        d2a = term1 + term2 + jnp.einsum('nij,nj->ni',dapert_dx,x1) # nSH x 3
-
-        # Now handle radius deviations
-        acceleration1_r = -self.pertgen.gradientPotentialStructural_per_SH(x0,t) # nSH x 3
-        d_palpha1dot_dtheta = acceleration1_r + jnp.einsum('ij,kj->ki',da_dx,dx1_dtheta) # nSH x 3
-
-        coord0 = jnp.hstack([v0, a0])
-        coord1 = jnp.hstack([v1, da, dv1_dtheta, d_palpha1dot_dtheta])
-        coord2 = jnp.hstack([v2, d2a])
-        coords_out = [coord0, coord1, coord2]
-        return coords_out
-        
-=======
         d2a = term1 + term2 + jnp.einsum('nij,nj->ni',dapert_dx,x1)
         
         
@@ -349,7 +316,6 @@ class MassPerturbation_OTF_secondOrder:
         coord2 = jnp.hstack([v2, d2a])
         coords_out = [coord0, coord1, coord2]
         return coords_out
->>>>>>> develop
 
 
 class MW_LMC_field:

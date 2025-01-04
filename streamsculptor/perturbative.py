@@ -471,3 +471,99 @@ class GenerateMassRadiusPerturbation_CustomBase(Potential):
             return space_and_derivs
         
         return jax.lax.cond(cpu, cpu_func, gpu_func)
+
+
+
+class GenerateMassRadiusPerturbation_CustomBase_SecondOrder(Potential):
+    """
+    Class to define a perturbation object, with a *custom base stream model*
+    Computes the perturbed stream up to second order in the mass perturbatation parameter.
+    Computes radius perturbation parameter as well (at first order in mass perturbation).
+    potiential_base: potential function for the base potential, in H_base
+    potential_perturbation: gravitation potential of the perturbation(s)
+    potential_structural: defined as the derivative of the perturbing potential wrspct to the structural parameter.
+    dPhi_alpha / dstructural. For instance, dPhi_alpha(x, t) / dr.
+    """
+    def __init__(self, potential_base, potential_perturbation, potential_structural, BaseStreamModel=None, units=None, **kwargs):
+        super().__init__(units,{'potential_base':potential_base, 'potential_perturbation':potential_perturbation, 'potential_structural':potential_structural, 'BaseStreamModel':BaseStreamModel})
+        self.gradient = None
+        self.potential_base = potential_base
+        self.potential_perturbation = potential_perturbation
+        self.gradientPotentialBase = potential_base.gradient
+        self.gradientPotentialPerturbation = potential_perturbation.gradient
+        self.gradientPotentialStructural = potential_structural.gradient
+
+        self.gradientPotentialPerturbation_per_SH = jax.jit(jax.jacfwd(potential_perturbation.potential_per_SH))
+        self.gradientPotentialStructural_per_SH = jax.jit(jax.jacfwd(potential_structural.potential_per_SH))
+        
+        
+        self.base_stream = BaseStreamModel
+        self.num_pert = self.potential_perturbation.subhalo_x0.shape[0]
+        ## Note: prog_w0 is the *intial condition*, that we must integrate forward from
+        ## .prog_loc_fwd[-1] is the final (observed) coordinate.
+        self.field_wobs = [BaseStreamModel.prog_loc_fwd[-1], jnp.zeros((self.num_pert, 12)), jnp.zeros((self.num_pert, 6))]
+        self.jump_ts = None
+        # Need to integrate backwards in time. BaseStreamModel.ts is in increasing time order, from past to present day [past, ..., observation time]
+        flipped_times = jnp.flip(BaseStreamModel.ts)
+        prog_fieldICs = integrate_field(w0=self.field_wobs,ts=flipped_times,field=fields.MassRadiusPerturbation_OTF_SecondOrder(self), backwards_int=True, **kwargs)
+        # Flip back to original time order, since we will integrate from [past, ..., observation time]
+        self.prog_base = prog_fieldICs### for testing
+        self.prog_fieldICs_first_order_mass = jnp.flipud(prog_fieldICs.ys[1])
+        self.prog_fieldICs_second_order_mass = jnp.flipud(prog_fieldICs.ys[2])
+        self.perturbation_ICs = self.compute_perturbation_ICs() # [N_star x N_sh x 12, N_star x N_sh x 6]
+        self.base_realspace_ICs = self.base_stream.streamICs # N_star x 6
+            
+        
+    @eqx.filter_jit
+    def compute_base_stream(self,cpu=False):
+        """
+        Compute the unperturbed stream.
+        """
+        return self.base_stream.gen_stream()
+
+    @eqx.filter_jit
+    def compute_perturbation_ICs(self):
+        """
+        Compute the initial conditions for the perturbation vector field.
+        """
+       
+        pert_ICs_deps = jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC,self.prog_fieldICs_first_order_mass[:,:,:6])
+        pert_ICs_depsdr =  jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC,self.prog_fieldICs_first_order_mass[:,:,6:])
+        deriv_ICs_first_order_mass = jnp.dstack([pert_ICs_deps,pert_ICs_depsdr]) # N_star x N_sh x 12
+
+        pert_ICs_second_order_mass = jnp.einsum('ijk,ilk->ilj',self.base_stream.dRel_dIC,self.prog_fieldICs_second_order_mass[:,:,:]) # N_star x N_sh x 6
+        deriv_ICs = [deriv_ICs_first_order_mass, pert_ICs_second_order_mass] # [N_star x N_sh x 12, N_star x N_sh x 6]
+        return deriv_ICs 
+
+    @eqx.filter_jit
+    def compute_perturbation_OTF(self, cpu=False, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-8, atol=1e-8, dtmin=0.05, max_steps=10_000, dtmax=None):
+        integrator = lambda w0, ts: integrate_field(w0=w0,ts=ts,field=fields.MassRadiusPerturbation_OTF_SecondOrder(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax, max_steps=max_steps)
+        integrator = jax.jit(integrator)
+        def cpu_func():
+            def scan_fun(carry, particle_idx):
+                i, deriv_ICs_curr = carry
+                ICs_total = [self.base_realspace_ICs[i], deriv_ICs_curr[0], deriv_ICs_curr[1]]
+                ts_arr = jnp.array([self.base_stream.ts[i], self.base_stream.ts[-1]])
+                space_and_derivs = integrator(ICs_total,ts_arr)
+                space_and_derivs = [space_and_derivs.ys[0][-1,:], space_and_derivs.ys[1][-1,:], space_and_derivs.ys[2][-1,:]]
+                pert_ics_next = [self.perturbation_ICs[0][i+1], self.perturbation_ICs[1][i+1]]
+                return [i+1, pert_ics_next], space_and_derivs
+
+            init_carry = [0, self.perturbation_ICs[0][0], self.perturbation_ICs[1][0]] 
+            particle_ids = self.base_stream.IDs[:-1]
+            final_state, all_states = jax.lax.scan(scan_fun,init_carry,particle_ids)
+            space_and_derivs = all_states
+            return space_and_derivs
+
+        def gpu_func():
+            def single_particle_integrate(idx):
+                ts_arr = jnp.array([self.base_stream.ts[idx], self.base_stream.ts[-1]])
+                space_and_derivs = integrator([self.base_realspace_ICs[idx], self.perturbation_ICs[0][idx], self.perturbation_ICs[1][idx]], ts_arr)
+                space_and_derivs = [space_and_derivs.ys[0][-1,:], space_and_derivs.ys[1][-1,:], space_and_derivs.ys[2][-1,:]]
+                return space_and_derivs
+            particle_ids = self.base_stream.IDs[:-1]
+            space_and_derivs = jax.vmap(single_particle_integrate)(particle_ids)
+            return space_and_derivs
+        
+        return jax.lax.cond(cpu, cpu_func, gpu_func)
+        

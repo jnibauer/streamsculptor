@@ -549,7 +549,7 @@ class GenerateMassRadiusPerturbation_CustomBase_SecondOrder(Potential):
                 pert_ics_next = [self.perturbation_ICs[0][i+1], self.perturbation_ICs[1][i+1]]
                 return [i+1, pert_ics_next], space_and_derivs
 
-            init_carry = [0, self.perturbation_ICs[0][0], self.perturbation_ICs[1][0]] 
+            init_carry = [0, [self.perturbation_ICs[0][0], self.perturbation_ICs[1][0]]] 
             particle_ids = self.base_stream.IDs[:-1]
             final_state, all_states = jax.lax.scan(scan_fun,init_carry,particle_ids)
             space_and_derivs = all_states

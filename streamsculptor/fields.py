@@ -297,7 +297,7 @@ class MassRadiusPerturbation_OTF_SecondOrder:
         dx1_dtheta, dv1_dtheta = coords[1][:,6:9], coords[1][:,9:] # nSH x 3
         x2, v2 = coords[2][:,:3], coords[2][:,3:] # nSH x 3
         
-        a0 = self.pot_base.acceleration(x0, t) 
+        a0 = self.potential_base.acceleration(x0, t) 
         a1 = -self.grad_per_SH(x0,t) # nSH x 3
         da_dx = self.dacceleration_dx(x0, t)[0] # 3 x 3
         d2a_dx2 = self.d2acceleration_dx2(x0,t)[0][0] # 3 x 3 x 3

@@ -256,6 +256,68 @@ class MassRadiusPerturbation_Interp:
         return jnp.hstack([d_qdot_d_eps,d_pdot_d_eps, d_qalpha1dot_dtheta, d_palpha1dot_dtheta])
 
 
+class MassPerturbation_OTF_secondOrder:
+    """
+    Applying perturbation theory in the mass and radius of a 
+    subhalo potential. Up to second order in mass perturbations.
+    OTF = "On The Fly"
+    The unperturbed orbits are computed in realtime, along
+    with the perturbation equations. No pre-computation is utilized.
+    coordinate vectors consist of a pytree: 
+    coords[0]: length 6 (position and velocity field in base potential)
+    coords[1]: length 12 (postion and veloicty derivatives wrspct to eps, radius)
+    coords: [ [x,y,z, vx, vy, vz],
+       [dx/deps,..., dvx/deps,..., d^2x/dthetadeps, ..., d^2vx/dthetadeps]  ]
+    """
+    def __init__(self, perturbation_generator):
+        self.pertgen = perturbation_generator
+        self.potential_base = perturbation_generator.potential_base
+        self.potential_pert = perturbation_generator.potential_perturbation
+        
+        self.acceleration = jax.jit(self.potential_base.acceleration)
+        self.dacceleration_dx = jax.jit(jax.jacfwd(self.acceleration,argnums=(0,)))
+        self.d2acceleration_dx2 = jax.jit(jax.jacfwd(self.dacceleration_dx,argnums=(0,)))
+        
+        self.grad_per_SH = jax.jit(jax.jacfwd(self.potential_pert.potential_per_SH))
+        self.minus_dapert_dx_perSH = jax.jit(jax.jacfwd(self.grad_per_SH))
+        
+        
+        
+        
+    @eqx.filter_jit
+    def term(self,t, coords, args):
+        """
+        x0,v0: base position and velocity
+        x1, v1: mass perturbations in each coord
+        dx1_dtheta, dv1_dtheta: second order mass*radius perturbations in each coord
+        """
+        
+        x0, v0 = coords[0][:3], coords[0][3:]
+        x1, v1 = coords[1][:,:3], coords[1][:,3:] # nSH x 3
+        x2, v2 = coords[2][:,:3], coords[2][:,3:] # nSH x 3
+        
+        a0 = self.pot_base.acceleration(x0, t) 
+        a1 = -self.grad_per_SH(x0,t) # nSH x 3
+        da_dx = self.dacceleration_dx(x0, t)[0] # 3 x 3
+        d2a_dx2 = self.d2acceleration_dx2(x0,t)[0][0] # 3 x 3 x 3
+        dapert_dx = -self.minus_dapert_dx_perSH(x0,t) # nSH x 3 x 3
+        
+        da = jnp.einsum('ij,nj->ni', da_dx, x1) + a1  # nSH x 3
+        
+        term1 = jnp.einsum('ij,kj->ki', da_dx, x2) # nSH x 3
+        inner_term2 = jnp.einsum('ikj,nk->nij', d2a_dx2, x1) # nSH x 3 x 3
+        term2 = jnp.einsum('nj,nij->ni', x1, inner_term2) # nSH x 3
+        d2a = term1 + term2 + jnp.einsum('nij,nj->ni',dapert_dx,x1)
+        
+        
+        
+        coord0 = jnp.hstack([v0, a0])
+        coord1 = jnp.hstack([v1, da])
+        coord2 = jnp.hstack([v2, d2a])
+        coords_out = [coord0, coord1, coord2]
+        return coords_out
+
+
 class MW_LMC_field:
     # The following field is based entirely on 
     # this script from AGAMA: 

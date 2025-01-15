@@ -54,19 +54,22 @@ class AGAMA_Spheroid(Potential):
         self.density = lambda xyz, t: self.density_func(xyz, t, self.densityNorm)
 
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def potential(self, xyz, t):
         r = jnp.sqrt(jnp.sum(xyz**2))
         return self.spl_pot_func(r)
 
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def density_func(self, xyz, t, densityNorm=1.0):
         r = jnp.sqrt(jnp.sum(xyz**2))
         r_over_rs = r/self.scaleRadius
         return densityNorm*( r_over_rs**(-self.gamma) )*( 1 + r_over_rs**self.alpha )**((self.gamma - self.beta)/self.alpha)*jnp.exp( -(r/self.outerCutoffRadius)**self.cutoffStrength )
        
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def solve_for_rho0_from_mass(self):
         r_grid = jnp.logspace(-5,jnp.log10(5*self.outerCutoffRadius),10_000)
         #stack the 1d array so we have 3d array with r_grid along x, zeros otherwise

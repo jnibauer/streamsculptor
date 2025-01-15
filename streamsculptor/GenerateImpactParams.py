@@ -42,7 +42,8 @@ class ImpactGenerator:
         self.tImpactBounds = tImpactBounds
         self.seednum = seednum
         
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def sample_impact_params(self):
         """
         Sample impact parameters
@@ -61,7 +62,8 @@ class ImpactGenerator:
         phi1_samples = jax.random.uniform(minval=self.phi1_bounds[0],maxval=self.phi1_bounds[1],key=keys[6],shape=(self.NumImpacts,))
         return {"phi":phi, "beta":beta, "gamma":gamma, "bImpact":bImpact, "vImpact":vImpact, 'tImpact':tImpact, 'phi1_samples':phi1_samples}
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def get_particle_mean(self, phi1_0=None):
         """
         Get average phase-space location of particles in stream at the input time
@@ -74,7 +76,8 @@ class ImpactGenerator:
         return stream_mean
         
         
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def _get_subhalo_ImpactParamsCartesian(self, tobs=None, particle_mean=None, tImpact=None, bImpact=None, vImpact=None, phi=None, beta=None, gamma=None):
         """
         Get impact parameters in Cartesian coordinates

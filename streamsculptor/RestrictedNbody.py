@@ -73,7 +73,8 @@ class RestrictedNbody_generator:
         mass_left_bool = inside_bool.sum() > 0
         return jax.lax.cond(mass_left_bool, mass_left, dissolved)
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def get_params(self,t, coords, args):
         """
         coords: N_particles x 6
@@ -87,7 +88,8 @@ class RestrictedNbody_generator:
        
         return mass_fit, r_s_fit
     
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def term(self,t, coords, args):
         """
         coords: N_particles x 6

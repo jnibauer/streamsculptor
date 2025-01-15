@@ -33,21 +33,21 @@ class Potential:
                 param = param.decompose(self.units).value
             setattr(self, name, param)
     
-    @eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def gradient(self, xyz, t):
         grad_func = jax.grad(self.potential)
         return grad_func(xyz, t)
     
-    @eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def density(self, xyz, t):
         lap = jnp.trace(jax.hessian(self.potential)(xyz, t))
         return lap / (4 * jnp.pi * self._G)
     
-    @eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def acceleration(self, xyz, t):
         return -self.gradient(xyz, t)
     
-    @eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def local_circular_velocity(self,xyz,t):
         r = jnp.sqrt(jnp.sum(xyz**2))
         r_hat = xyz / r
@@ -55,7 +55,7 @@ class Potential:
         dphi_dr = jnp.sum(grad_phi*r_hat)
         return jnp.sqrt( r*dphi_dr )
    
-    @eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def jacobian_force(self, xyz, t):
         """
         from https://github.com/undark-lab/sstrax
@@ -63,7 +63,7 @@ class Potential:
         jacobian_force = jax.jacfwd(self.gradient)
         return jacobian_force(xyz, t)
 
-    @eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def dphidr(self, x, t):
         """
         Radial derivative of the potential
@@ -72,7 +72,7 @@ class Potential:
         r_hat = x/rad
         return jnp.sum(self.gradient(x,t)*r_hat)
 
-    @eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def d2phidr2(self, x, t):
         """
         Second radial derivative of the potential
@@ -84,7 +84,7 @@ class Potential:
         return jnp.sum(jax.grad(dphi_dr_func)(x)*r_hat)
         
 
-    @eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def omega(self, x,v):
         """
         Computes angular velocity 
@@ -94,7 +94,7 @@ class Potential:
         omega_vec = jnp.cross(x, v) / (rad**2)
         return jnp.linalg.norm(omega_vec)
 
-    @eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def tidalr(self, x, v, Msat, t):
         """
         Computes the tidal radius of a cluster
@@ -102,7 +102,7 @@ class Potential:
         """
         return (self._G * Msat / ( self.omega(x, v) ** 2 - self.d2phidr2(x, t)) ) ** (1.0 / 3.0)
     
-    @eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def lagrange_pts(self,x,v,Msat, t):
         r_tidal = self.tidalr(x,v,Msat, t)
         r_hat = x/jnp.linalg.norm(x)
@@ -112,7 +112,7 @@ class Potential:
     
 
     ##################### STANDARD FIELD ###############################
-    @eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def velocity_acceleration(self,t,xv,args):
         x, v = xv[:3], xv[3:]
         acceleration = -self.gradient(x,t)
@@ -120,7 +120,8 @@ class Potential:
     
     #################### Orbit integrator ###########################
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnames=('self','dense','solver','max_steps','rtol','atol','steps','jump_ts'))
     def integrate_orbit(self,w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,steps=False,jump_ts=None,):
         """
         Integrate orbit associated with potential function.
@@ -158,7 +159,8 @@ class Potential:
         )
         return solution
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnames=('self','dense','solver','max_steps','steps','jump_ts','rtol','atol'))
     def integrate_orbit_batch_scan(self, w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,steps=False,jump_ts=None,):
         """
         Integrate a batch of orbits using scan [best for CPU usage]
@@ -177,7 +179,8 @@ class Potential:
         final_state, all_states = jax.lax.scan(body, init_carry, jnp.arange(len(w0)))
         return all_states
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnames=('self','dense','solver','max_steps','steps','jump_ts','rtol','atol'))
     def integrate_orbit_batch_vmapped(self, w0=None, ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-7, atol=1e-7, dtmin=0.3, dtmax=None, max_steps=10_000, t0=None, t1=None, steps=False, jump_ts=None):
         """
         Integrate a batch of orbits using vmap [best for GPU usage]
@@ -199,7 +202,8 @@ class Potential:
    
     ################### Stream Model ######################
     
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def release_model(self, x=None, v=None, Msat=None, i=None, t=None, seed_num=None, kval_arr = 1.0):
         # if kval_arr is a scalar, then we assume the default values of kvals
         pred = jnp.isscalar(kval_arr)
@@ -272,7 +276,8 @@ class Potential:
         
         return pos_lead, pos_trail, v_lead, v_trail
     
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnames=('self','solver','rtol','atol','max_steps'))
     def gen_stream_ics(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'),kval_arr=1.0, rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000):
         ws_jax = self.integrate_orbit(w0=prog_w0,ts=ts,solver=solver, rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps).ys
         Msat = Msat*jnp.ones(len(ts))
@@ -289,7 +294,8 @@ class Potential:
         return pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr
     
             
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnames=('self','solver','rtol','atol','max_steps'))
     def gen_stream_scan(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'), kval_arr=1.0, rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000):
         """
         Generate stellar stream by scanning over the release model/integration. Better for CPU usage.
@@ -319,7 +325,8 @@ class Potential:
         lead_arm, trail_arm = all_states
         return lead_arm, trail_arm
     
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnames=('self','solver','rtol','atol','max_steps'))
     def gen_stream_vmapped(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded') , kval_arr=1.0, rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000):
         """
         Generate stellar stream by vmapping over the release model/integration. Better for GPU usage.
@@ -348,7 +355,8 @@ class Potential:
 
     ################### Dense Stream Model ######################
   
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnames=('self','solver','rtol','atol','max_steps'))
     def gen_stream_scan_dense(self, ts=None, prog_w0=None, Msat=None, seed_num=None,solver=diffrax.Dopri5(scan_kind='bounded'), kval_arr=1.0, rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000):
         """
         Generate dense stellar stream model by scanning over the release model/integration. Better for CPU usage.
@@ -379,7 +387,8 @@ class Potential:
         return lead_arm_trail_arm[0]
 
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnames=('self','solver','max_steps','rtol','atol'))
     def gen_stream_vmapped_dense(self, ts=None, prog_w0=None, Msat=None, seed_num=None,solver=diffrax.Dopri5(scan_kind='bounded'), kval_arr=1.0, rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000):
         """
         Generate dense stellar stream by vmapping over the release model/integration. Better for GPU usage.

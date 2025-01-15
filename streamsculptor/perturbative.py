@@ -63,7 +63,8 @@ class GenerateMassRadiusPerturbation(Potential):
             self.base_realspace_ICs_trail =  jnp.hstack([self.base_stream.streamICs[1], self.base_stream.streamICs[3]]) # N_trail x 6
             
         
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,1))
     def compute_base_stream(self,cpu=True):
         """
         Compute the unperturbed stream.
@@ -78,7 +79,8 @@ class GenerateMassRadiusPerturbation(Potential):
         lead, trail = jax.lax.cond(cpu, cpu_func, gpu_func)
         return lead, trail
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def compute_perturbation_ICs(self,):
         """
         Compute the initial conditions for the perturbation vector field.
@@ -94,7 +96,8 @@ class GenerateMassRadiusPerturbation(Potential):
 
         return lead_deriv_ICs, trail_deriv_ICs # N_lead x N_sh x 12
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnames=('self','cpu','solver','rtol','atol','dtmin','dtmax','max_steps'))
     def compute_perturbation_OTF(self, cpu=True, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, dtmax=None, max_steps=10_000):
         integrator = lambda w0, ts: integrate_field(w0=w0,ts=ts,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax,max_steps=max_steps)
         integrator = jax.jit(integrator)
@@ -131,7 +134,8 @@ class GenerateMassRadiusPerturbation(Potential):
         return jax.lax.cond(cpu, cpu_func, gpu_func)
         
     ################## EXPERIMENTAL ##################
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnames=('self','cpu','solver','rtol','atol','dtmin','dtmax'))
     def compute_perturbation_jacobian_OTF(self, cpu=True, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, dtmax=None):
         integrator = lambda realspace_w0, pert_w0, ts: integrate_field(w0=[realspace_w0, pert_w0],ts=ts,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax)
         integrator = jax.jit(integrator)
@@ -170,7 +174,8 @@ class GenerateMassRadiusPerturbation(Potential):
     ##################################################
     
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit, static_argnames=('self','cpu','solver','rtol','atol','dtmin','dtmax'))
     def compute_perturbation_Interp(self,cpu=True,solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, dtmax=None):
         """
         Compute the perturbation field from the interpolated stream.
@@ -229,7 +234,8 @@ class GenerateMassPerturbation(Potential):
 
         self.gradientPotentialPerturbation_per_SH = jax.jit(jax.jacfwd(potential_perturbation.potential_per_SH))
         
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def potential(self, xyz, t,):
         raise NotImplementedError
 
@@ -270,7 +276,8 @@ class BaseStreamModel(Potential):
         else:
             self.stream_interp = None
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def release_func_jacobian(self,):     
         """ 
         Compute the Jacobian of the release function with repsect to (q,p) for leading, trailing arms.
@@ -327,7 +334,8 @@ class CustomBaseStreamModel(Potential):
         else:
             self.stream_interp = None
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def gen_stream(self):
         """
         Compute the unperturbed stream.
@@ -335,7 +343,8 @@ class CustomBaseStreamModel(Potential):
         integrator = lambda w0, t0, t1: self.potential_base.integrate_orbit(w0=w0, t0=t0, t1=t1, dense=False, solver=self.solver, ts=jnp.array([t1]))
         return jax.vmap(integrator,in_axes=((0,0,None,)))(self.streamICs[:-1,:], self.ts[:-1], self.ts[-1])
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def release_func_jacobian(self,):     
         """ 
         Compute the Jacobian of the release function with repsect to (q,p) for leading, trailing arms.
@@ -391,14 +400,16 @@ class GenerateMassRadiusPerturbation_CustomBase(Potential):
         self.base_realspace_ICs = self.base_stream.streamICs # N_star x 6
             
         
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,1,))
     def compute_base_stream(self,cpu=True):
         """
         Compute the unperturbed stream.
         """
         return self.base_stream.gen_stream()
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def compute_perturbation_ICs(self):
         """
         Compute the initial conditions for the perturbation vector field.
@@ -409,7 +420,8 @@ class GenerateMassRadiusPerturbation_CustomBase(Potential):
         deriv_ICs = jnp.dstack([pert_ICs_deps,pert_ICs_depsdr])
         return deriv_ICs # N_star x N_sh x 12
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnames=('self','cpu','solver','rtol','atol','dtmin','dtmax','max_steps'))
     def compute_perturbation_OTF(self, cpu=True, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, max_steps=10_000, dtmax=None):
         integrator = lambda w0, ts: integrate_field(w0=w0,ts=ts,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax, max_steps=max_steps)
         integrator = jax.jit(integrator)
@@ -441,7 +453,8 @@ class GenerateMassRadiusPerturbation_CustomBase(Potential):
         return jax.lax.cond(cpu, cpu_func, gpu_func)
         
     ################## EXPERIMENTAL ##################
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnames=('self','cpu','solver','rtol','atol','dtmin','dtmax'))
     def compute_perturbation_jacobian_OTF(self, cpu=True, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, dtmax=None):
         integrator = lambda realspace_w0, pert_w0, ts: integrate_field(w0=[realspace_w0, pert_w0],ts=ts,field=fields.MassRadiusPerturbation_OTF(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax)
         integrator = jax.jit(integrator)
@@ -514,14 +527,16 @@ class GenerateMassRadiusPerturbation_CustomBase_SecondOrder(Potential):
         self.base_realspace_ICs = self.base_stream.streamICs # N_star x 6
             
         
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,1,))
     def compute_base_stream(self,cpu=False):
         """
         Compute the unperturbed stream.
         """
         return self.base_stream.gen_stream()
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnums=(0,))
     def compute_perturbation_ICs(self):
         """
         Compute the initial conditions for the perturbation vector field.
@@ -535,7 +550,8 @@ class GenerateMassRadiusPerturbation_CustomBase_SecondOrder(Potential):
         deriv_ICs = [deriv_ICs_first_order_mass, pert_ICs_second_order_mass] # [N_star x N_sh x 12, N_star x N_sh x 6]
         return deriv_ICs 
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
+    @partial(jax.jit,static_argnames=('self','cpu','solver','rtol','atol','dtmin','dtmax','max_steps'))
     def compute_perturbation_OTF(self, cpu=False, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-8, atol=1e-8, dtmin=0.05, max_steps=10_000, dtmax=None):
         integrator = lambda w0, ts: integrate_field(w0=w0,ts=ts,field=fields.MassRadiusPerturbation_OTF_SecondOrder(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax, max_steps=max_steps)
         integrator = jax.jit(integrator)

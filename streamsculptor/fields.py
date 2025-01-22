@@ -36,7 +36,7 @@ term function.
 def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, args=None, rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, max_steps=1_000,jump_ts=None, backwards_int=False,t0=0.0, t1=0.0):
     """
     Integrate a trajectory on a field.
-    w0: length 6 array [x,y,z,vx,vy,vz]
+    w0: pytree initial conditions. Arbitrary shape, must be compatible with the input field.
     ts: array of saved times. Must be at least length 2, specifying a minimum and maximum time. This does _not_ determine the timestep
     dense: boolean array.  When False, return orbit at times ts. When True, return dense interpolation of orbit between ts.min() and ts.max()
     solver: integrator

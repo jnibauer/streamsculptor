@@ -119,7 +119,37 @@ def simcart_to_q_icrs(r_gc):
     
 
     return q_icrs
+    
+@jax.jit
+def ICRS_to_simcart(alpha, delta, dist, pm_ra_cosdec, pm_dec, rv):
+    """
+    Inverse of simvel_to_ICRS. Takes us from icrs to reflex corrected galactocentric frame
+    inputs:
+        alpha, delta [rad]
+        dist [heliocentric, kpc]
+        pm_ra_cosdec [NOT refelx corrected, mas/yr]
+        pm_dec [NOT reflex corrected, mas/yr]
+        rv [NOT reflex corrected, kpc/Myr]
+    outputs:
+        sim_q (position in kpc), sim_qdot (velocity in kpc/Myr, reflex corrected)
+    """
+    rad_Myr_to_mas_yr = 206.26480624709637
+    Sun_reflex = jnp.array([0.01319299, 0.25117811, 0.0079567 ])  # kpc/Myr
+    
+    icrs_vec = jnp.array([alpha, delta, dist])
+    X_galcen = jc.alpha_delta_to_simcart(icrs_vec)
+    
+    deriv = jax.jacfwd(jc.alpha_delta_to_simcart)(icrs_vec)
+    alpha_hat = deriv[:,0]/jnp.linalg.norm(deriv[:,0])
+    dec_hat = deriv[:,1]/jnp.linalg.norm(deriv[:,1])
+    d_hat = deriv[:,2]/jnp.linalg.norm(deriv[:,2])
+    
+    
 
+    V_galcen = dist*(pm_ra_cosdec / rad_Myr_to_mas_yr)*alpha_hat + dist*(pm_dec / rad_Myr_to_mas_yr)*dec_hat + rv*d_hat + Sun_reflex
+    
+
+    return X_galcen, V_galcen
 
 @jax.jit
 def simvel_to_ICRS(sim_q, sim_qdot):

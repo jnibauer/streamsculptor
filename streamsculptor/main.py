@@ -121,8 +121,8 @@ class Potential:
     #################### Orbit integrator ###########################
 
     #@eqx.filter_jit
-    @partial(jax.jit,static_argnames=('self','dense','solver','max_steps','rtol','atol','steps','jump_ts'))
-    def integrate_orbit(self,w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,steps=False,jump_ts=None,):
+    @partial(jax.jit,static_argnames=('self','dense','solver','max_steps','rtol','atol','steps','jump_ts', 'throw'))
+    def integrate_orbit(self,w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, t0=None, t1=None,steps=False,jump_ts=None,throw=False):
         """
         Integrate orbit associated with potential function.
         w0: length 6 array [x,y,z,vx,vy,vz]
@@ -132,6 +132,7 @@ class Potential:
         rtol, atol: tolerance for PIDController, adaptive timestep
         dtmin: minimum timestep (in Myr)
         max_steps: maximum number of allowed timesteps
+        throw: whether to throw an error if the integrator fails. False by default. Returns will be infs upon failure. If throw is True and integration fails, raise exception.
         """
           
         term = ODETerm(self.velocity_acceleration)
@@ -155,7 +156,8 @@ class Potential:
             stepsize_controller=stepsize_controller,
             discrete_terminating_event=None,
             max_steps=max_steps,
-            adjoint=ForwardMode()
+            adjoint=ForwardMode(),
+            throw= throw
         )
         return solution
 
@@ -326,13 +328,13 @@ class Potential:
         return lead_arm, trail_arm
     
     #@eqx.filter_jit
-    @partial(jax.jit,static_argnames=('self','solver','rtol','atol','max_steps'))
-    def gen_stream_vmapped(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded') , kval_arr=1.0, rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000):
+    @partial(jax.jit,static_argnames=('self','solver','rtol','atol','max_steps', 'throw'))
+    def gen_stream_vmapped(self, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded') , kval_arr=1.0, rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000, throw=False):
         """
         Generate stellar stream by vmapping over the release model/integration. Better for GPU usage.
         """
         pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = self.gen_stream_ics(ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver, kval_arr=kval_arr, rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps)
-        orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps).ys[-1]
+        orb_integrator = lambda w0, ts: self.integrate_orbit(w0=w0, ts=ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps, throw=throw).ys[-1]
         orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
         @jax.jit
         def single_particle_integrate(particle_number,pos_close_curr,pos_far_curr,vel_close_curr,vel_far_curr):

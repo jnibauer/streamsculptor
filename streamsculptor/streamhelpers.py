@@ -66,18 +66,21 @@ def gen_stream_ics_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msa
     # Integrate progenitor in full potential, base + perturbation
     ws_jax = pot_total.integrate_orbit(w0=prog_w0,ts=ts,solver=solver,max_steps=max_steps, rtol=rtol, atol=atol, dtmin=dtmin).ys
     Msat = Msat*jnp.ones(len(ts))
-    
-    def scan_fun(carry, t):
-        # compute release model derivs (tidal tensor along prog's orbit) in base potential only, to avoid numerical errors with perturbation flyby
-        i, pos_close, pos_far, vel_close, vel_far = carry
-        pos_close_new, pos_far_new, vel_close_new, vel_far_new = pot_base.release_model(x=ws_jax[i,:3], v=ws_jax[i,3:], Msat=Msat[i],i=i, t=t, seed_num=seed_num, kval_arr=kval_arr)
-        return [i+1, pos_close_new, pos_far_new, vel_close_new, vel_far_new], [pos_close_new, pos_far_new, vel_close_new, vel_far_new]
-        
-        
-    init_carry = [0, jnp.array([0.0,0.0,0.]), jnp.array([0.0,0.0,0.]), jnp.array([0.0,0.0,0.]), jnp.array([0.0,0.0,0.])] 
-    final_state, all_states = jax.lax.scan(scan_fun, init_carry, ts)
+
+    @jax.jit
+    def body_func(i):
+        """
+        body function to vmap over
+        """
+        pos_close_new, pos_far_new, vel_close_new, vel_far_new = pot_base.release_model(x=ws_jax[i,:3], v=ws_jax[i,3:], Msat=Msat[i],i=i, t=ts[i], seed_num=seed_num, kval_arr=kval_arr)
+        return [pos_close_new, pos_far_new, vel_close_new, vel_far_new]
+
+    iterator_arange = jnp.arange(len(ts))
+    all_states = jax.vmap(body_func)(iterator_arange)
     pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = all_states
     return pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr
+    
+
 
 #@eqx.filter_jit
 @partial(jax.jit,static_argnames=('pot_base','pot_pert','solver','max_steps','rtol','atol','dtmin'))

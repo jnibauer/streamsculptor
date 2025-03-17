@@ -284,15 +284,20 @@ class Potential:
         ws_jax = self.integrate_orbit(w0=prog_w0,ts=ts,solver=solver, rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps).ys
         Msat = Msat*jnp.ones(len(ts))
 
-        def scan_fun(carry, t):
-            i, pos_close, pos_far, vel_close, vel_far = carry
-            pos_close_new, pos_far_new, vel_close_new, vel_far_new = self.release_model(x=ws_jax[i,:3], v=ws_jax[i,3:], Msat=Msat[i], i=i, t=t, seed_num=seed_num, kval_arr=kval_arr)
-            return [i+1, pos_close_new, pos_far_new, vel_close_new, vel_far_new], [pos_close_new, pos_far_new, vel_close_new, vel_far_new]
+    
+        @jax.jit
+        def body_func(i):
+            """
+            body function to vmap over
+            """
+            pos_close_new, pos_far_new, vel_close_new, vel_far_new = self.release_model(x=ws_jax[i,:3], v=ws_jax[i,3:], Msat=Msat[i], i=i, t=ts[i], seed_num=seed_num, kval_arr=kval_arr)
+            return [pos_close_new, pos_far_new, vel_close_new, vel_far_new]
+        
             
-            
-        init_carry = [0, jnp.array([0.0,0.0,0.]), jnp.array([0.0,0.0,0.]), jnp.array([0.0,0.0,0.]), jnp.array([0.0,0.0,0.])] 
-        final_state, all_states = jax.lax.scan(scan_fun, init_carry, ts)
+        iterator_arange = jnp.arange(len(ts))
+        all_states = jax.vmap(body_func)(iterator_arange)
         pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = all_states
+
         return pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr
     
             

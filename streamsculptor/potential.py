@@ -70,6 +70,20 @@ class NFWPotential(Potential):
         m = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 )/self.r_s ##removed softening! used to be .001 after xyz[2]**2
         return v_h2*jnp.log(1.0+ m) / m
 
+class TriaxialNFWPotential(Potential):
+    """
+    Flattening in the potential, not the density.
+    """
+    def __init__(self, m, r_s, q1=1.0, q2=1.0, q3=1.0, units=None):
+        super().__init__(units, {'m': m, 'r_s': r_s, 'q1': q1, 'q2': q2, 'q3': q3})
+    @partial(jax.jit,static_argnums=(0,))
+    def potential(self,xyz,t):
+        xyz = jnp.array([xyz[0]/self.q1,xyz[1]/self.q2,xyz[2]/self.q3])
+        v_h2 = -self._G*self.m/self.r_s
+        m = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 )/self.r_s ##removed softening! used to be .001 after xyz[2]**2
+        return v_h2*jnp.log(1.0+ m) / m
+
+
 class Isochrone(Potential):
     
     def __init__(self, m, a, units=None):

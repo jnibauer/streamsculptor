@@ -137,9 +137,9 @@ def ICRS_to_simcart(alpha, delta, dist, pm_ra_cosdec, pm_dec, rv):
     Sun_reflex = jnp.array([0.01319299, 0.25117811, 0.0079567 ])  # kpc/Myr
     
     icrs_vec = jnp.array([alpha, delta, dist])
-    X_galcen = jc.alpha_delta_to_simcart(icrs_vec)
+    X_galcen = alpha_delta_to_simcart(icrs_vec)
     
-    deriv = jax.jacfwd(jc.alpha_delta_to_simcart)(icrs_vec)
+    deriv = jax.jacfwd(alpha_delta_to_simcart)(icrs_vec)
     alpha_hat = deriv[:,0]/jnp.linalg.norm(deriv[:,0])
     dec_hat = deriv[:,1]/jnp.linalg.norm(deriv[:,1])
     d_hat = deriv[:,2]/jnp.linalg.norm(deriv[:,2])

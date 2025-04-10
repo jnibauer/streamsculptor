@@ -146,6 +146,7 @@ class TimeDepProgenitorPotential(Potential):
 
 
 
+
     
 class BarPotential(Potential):
     """
@@ -298,6 +299,22 @@ class TimeDepTranslatingPotential(Potential):
         center = self.center_spl(t)
         xyz_adjust = xyz - center
         return self.pot.potential(xyz_adjust,t)
+
+class GrowingPotential(Potential):
+    """
+    Time dependent potential that grows with a time-dependent growth factor.
+    Inputs include
+    pot: potential object
+    growth_func: a function that takes a single argument [time] and returns a scalar growth factor
+    """
+    def __init__(self, pot, growth_func, units=None):
+        super().__init__(units,{'pot':pot, 'growth_func':growth_func})
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def potential(self, xyz, t):
+        growth_factor = self.growth_func(t)
+        return self.pot.potential(xyz,t) * growth_factor
+
 
 class UniformAcceleration(Potential):
     """

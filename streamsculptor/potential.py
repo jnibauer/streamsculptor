@@ -663,6 +663,61 @@ class SubhaloLinePotential_dRadius_Custom(Potential):
         vmapped_cond = jax.vmap(jax.lax.cond,in_axes=((0,None,None,0,0,0,None)))
         pot_per_subhalo = vmapped_cond(pred,true_func,false_func, self.subhalo_x0, self.subhalo_v, self.subhalo_t0, t)#jax.lax.cond(pred, true_func, false_func)
         return pot_per_subhalo
+
+
+class SubhaloLinePotentialCustom_fromFunc(Potential):
+    """
+    SubhaloLinePotential initialized from a custom function form.
+    func must be a potential object with keyword arguments (m, r_s, units)
+    """
+    def __init__(self, func, m, r_s, subhalo_x0, subhalo_v, subhalo_t0, t_window, units=None):
+        super().__init__(units, {'func':func, 'm': m, 'r_s': r_s, 'subhalo_x0': subhalo_x0, 'subhalo_v': subhalo_v, 
+        'subhalo_t0':subhalo_t0, 't_window':t_window,})
+    
+
+    @partial(jax.jit,static_argnums=(0,))
+    def single_subhalo_potential(self, xyz, m, r_s, t):
+        return self.func(m=m, r_s=r_s, units=usys).potential(xyz,t)
+
+    @partial(jax.jit,static_argnums=(0,))
+    def potential(self,xyz, t):
+        """
+        xyz is where we want to evalaute the potential due to the ensemble of subhalos
+        t is evaluation time.
+        """
+        def true_func(subhalo_x0, subhalo_v, subhalo_t0, m, r_s, t):
+            relative_position = xyz - (subhalo_x0 + subhalo_v*(t - subhalo_t0))
+            pot_values = self.single_subhalo_potential(relative_position, m,r_s,t)#pot_all_subhalos_func(relative_position,self.m,self.a,t)
+            return pot_values
+        
+        def false_func(subhalo_x0, subhalo_v, subhalo_t0, m, r_s, t):
+            return jnp.array(0.0)
+
+        pred = jnp.abs(t - self.subhalo_t0) < self.t_window # True if in window, false otherwise
+
+        vmapped_cond = jax.vmap(jax.lax.cond,in_axes=((0,None,None,0,0,0,0,0,None)))
+        pot_per_subhalo = vmapped_cond(pred,true_func,false_func, self.subhalo_x0, self.subhalo_v, self.subhalo_t0, self.m, self.r_s, t)#jax.lax.cond(pred, true_func, false_func)
+        return jnp.sum(pot_per_subhalo)
+
+    @partial(jax.jit,static_argnums=(0,))
+    def potential_per_SH(self,xyz, t):
+        """
+        xyz is where we want to evalaute the potential due to the ensemble of subhalos
+        t is evaluation time.
+        """
+        def true_func(subhalo_x0, subhalo_v, subhalo_t0, m, r_s, t):
+            relative_position = xyz - (subhalo_x0 + subhalo_v*(t - subhalo_t0))
+            pot_values = self.single_subhalo_potential(relative_position, m,r_s,t)#pot_all_subhalos_func(relative_position,self.m,self.a,t)
+            return pot_values
+        
+        def false_func(subhalo_x0, subhalo_v, subhalo_t0, m, r_s, t):
+            return jnp.array(0.0)
+
+        pred = jnp.abs(t - self.subhalo_t0) < self.t_window # True if in window, false otherwise
+
+        vmapped_cond = jax.vmap(jax.lax.cond,in_axes=((0,None,None,0,0,0,0,0,None)))
+        pot_per_subhalo = vmapped_cond(pred,true_func,false_func, self.subhalo_x0, self.subhalo_v, self.subhalo_t0, self.m, self.r_s, t)#jax.lax.cond(pred, true_func, false_func)
+        return pot_per_subhalo
         
 ################ HELPER FUNCTIONS ##################
 @jax.jit

@@ -425,8 +425,8 @@ class MW_LMC_Potential(Potential):
         pot_total_lst = [self.pot_MW, self.translating_LMC_pot, self.unif_acc]
         self.total_pot = Potential_Combine(pot_total_lst, units=units)
         
-        self.gradient = self.total_pot.gradient
-        self.acceleration = self.total_pot.acceleration
+        #self.gradient = self.total_pot.gradient
+        #self.acceleration = self.total_pot.acceleration
 
 
     @partial(jax.jit,static_argnums=(0,))
@@ -436,6 +436,20 @@ class MW_LMC_Potential(Potential):
     @partial(jax.jit,static_argnums=(0,))
     def MW_velocity_func(self,t):
         return jnp.array([self.velocity_func_x(t), self.velocity_func_y(t), self.velocity_func_z(t)])
+
+    @partial(jax.jit,static_argnums=(0,))
+    def gradient(self,xyz,t):
+        """
+        Gradient of the potential with respect to the position
+        """
+        return self.total_pot.gradient(xyz,t)
+    
+    @partial(jax.jit,static_argnums=(0,))
+    def acceleration(self,xyz,t):
+        """
+        Acceleration of the potential
+        """
+        return self.total_pot.acceleration(xyz,t)
 
     @partial(jax.jit,static_argnums=(0,))
     def potential(self, xyz, t):

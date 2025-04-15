@@ -339,9 +339,101 @@ class UniformAcceleration(Potential):
     @partial(jax.jit,static_argnums=(0,))
     def acceleration(self,xyz,t):
         return -self.gradient(xyz, t)
-    
 
 class MW_LMC_Potential(Potential):
+    """
+    This potential is implemented from the AGAMA script: https://github.com/GalacticDynamics-Oxford/Agama/blob/c507fc3e703513ae4a41bb705e171a4d036754a8/py/example_lmc_mw_interaction.py
+    Approximation for the Milky Way and LMC potentials, evolving in time as rigid bodies.
+    Almost the same as AGAMA_MW_LMC_Potential, except here we do not use truncated NFWs (we just use the usual NFW potential which has infinite extent)
+    This "potential" is non-conservative, so only the force is implemented.
+    The LMC experiences chandrasekhar dynamical friction, with a spatially dependent drag force (velocity dispersion compute form MW potential using AGAMA)
+    For interactive notebook implementation, see examples/mw_lmc.ipynb
+    Crucially, force field assumes we are in the non-inertial frame of the Milky Way.
+    Therefore, integration must be done in the non-inertial frame. 
+    This means the MW's reflex motion will be incorporated in all integrated velocity vectors
+    Must integrate from a negative time > -14_000 Myr ago to present day (t=0).
+
+    Caution: all splines are C2 (i.e., twice differentiable). Only a single round of automatic diffrentation should be applied 
+    to orbits in this potential. 
+    TODO: use higher-order splines.
+    """
+    def __init__(self, units=None):
+        super().__init__(units,{'params':None})
+        # Load the data for MW and LMC motion
+        data_path_MW = os.path.join(os.path.dirname(__file__), 'data/LMC_MW_potential', 'MW_motion_dict.npy')
+        data_path_LMC = os.path.join(os.path.dirname(__file__), 'data/LMC_MW_potential', 'LMC_motion_dict.npy')
+        MW_motion_dict = jnp.load(data_path_MW, allow_pickle=True).item()
+        LMC_motion_dict = jnp.load(data_path_LMC, allow_pickle=True).item()
+        
+        # LMC spatial track
+        self.LMC_x = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,0], method='cubic2')
+        self.LMC_y = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,1], method='cubic2')
+        self.LMC_z = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,2], method='cubic2')
+
+        # MW velocity track
+        self.velocity_func_x = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,3], method='cubic2')
+        self.velocity_func_y = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,4], method='cubic2')
+        self.velocity_func_z = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,5], method='cubic2')
+
+        # Create a simple but realistic model of the Milky Way with a bulge, a single disk,
+        # and a spherical dark halo
+        
+        #Bulge: HernquistPotential
+        pot_bulge = HernquistPotential(m=5e9, r_s=1.0, units=units)
+
+        #Disk: Miyamotonagai
+        pot_disk = MiyamotoNagaiDisk(m=5.0e10, a=3.0, b=0.3, units=units)
+
+        #Halo: NFWPotential
+        #Params follow Gala MWPotential2022
+        pot_halo = NFWPotential(m=5.4e11, r_s=15.62, units=units)
+
+        pot_MW_lst = [pot_bulge, pot_disk, pot_halo]
+        self.pot_MW = Potential_Combine(pot_MW_lst, units=units)
+
+        #LMC: NFWPotential
+        massLMC    = .85e11#.85e11
+        radiusLMC  = (massLMC/1e11)**0.6 * 8.5
+        self.pot_LMC = NFWPotential(m=massLMC, r_s=radiusLMC, units=units)
+
+        # Create the LMC model
+        self.translating_LMC_pot = TimeDepTranslatingPotential(pot=self.pot_LMC, center_spl=self.LMC_center_spline,units=units)
+        # Uniform acceleration: we will assume integration in the *non-intertial* frame of the MW
+        # Uniform acceleration is the negative of the derivative of the MW velocity function (MW's velocity track in intertial frame)
+        self.unif_acc = UniformAcceleration(velocity_func=self.MW_velocity_func,units=units)
+        pot_total_lst = [self.pot_MW, self.translating_LMC_pot, self.unif_acc]
+        self.total_pot = Potential_Combine(pot_total_lst, units=units)
+        
+
+    @partial(jax.jit,static_argnums=(0,))
+    def LMC_center_spline(self,t):
+        return jnp.array([self.LMC_x(t), self.LMC_y(t), self.LMC_z(t)])
+        
+    @partial(jax.jit,static_argnums=(0,))
+    def MW_velocity_func(self,t):
+        return jnp.array([self.velocity_func_x(t), self.velocity_func_y(t), self.velocity_func_z(t)])
+
+    @partial(jax.jit,static_argnums=(0,))
+    def gradient(self,xyz,t):
+        """
+        Gradient of the potential with respect to the position
+        """
+        return self.total_pot.gradient(xyz,t)
+    
+    @partial(jax.jit,static_argnums=(0,))
+    def acceleration(self,xyz,t):
+        """
+        Acceleration of the potential
+        """
+        return self.total_pot.acceleration(xyz,t)
+
+    @partial(jax.jit,static_argnums=(0,))
+    def potential(self, xyz, t):
+        # Raise error with message
+        raise NotImplementedError("Potential not implemented, force is non-conservative")
+    
+
+class AGAMA_MW_LMC_Potential(Potential):
     """
     This potential is implemented from the AGAMA script: https://github.com/GalacticDynamics-Oxford/Agama/blob/c507fc3e703513ae4a41bb705e171a4d036754a8/py/example_lmc_mw_interaction.py
     Approximation for the Milky Way and LMC potentials, evolving in time as rigid bodies.
@@ -455,6 +547,9 @@ class MW_LMC_Potential(Potential):
     def potential(self, xyz, t):
         # Raise error with message
         raise NotImplementedError("Potential not implemented, force is non-conservative")
+
+
+    
 
  
 class CustomPotential(Potential):

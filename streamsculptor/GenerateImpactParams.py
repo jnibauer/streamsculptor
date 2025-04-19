@@ -15,6 +15,7 @@ class ImpactGenerator:
         stream_phi1: phi1 values of stream particles, 1D array
         phi1window: scalar width of window in phi1 in which to average stream particles (deg)
         tobs: observation time
+        bImpact_bounds: can be either length 2 array w/ lower and upper impact param, or N_impact x 2 array with lower and upper impact param for each impact
         ----------------------------------------------------------------------------------------
         Example usage:
         ->  stream = jnp.vstack([lead,trail])
@@ -31,6 +32,7 @@ class ImpactGenerator:
         self.NumImpacts = NumImpacts
         self.tobs = tobs
         self.stream_length = stream_length
+        self.bImpact_bounds = bImpact_bounds
         if phi1_bounds is None:
             self.phi1_bounds = [jnp.min(stream_phi1), jnp.max(stream_phi1)]
         else:
@@ -39,6 +41,14 @@ class ImpactGenerator:
         self.phi_bounds = phi_bounds
         self.beta_bounds = beta_bounds
         self.gamma_bounds = gamma_bounds
+        if len(self.bImpact_bounds) == 2:
+            self.b_low = jnp.ones_like(self.NumImpacts) * self.bImpact_bounds[0]
+            self.b_high = jnp.ones_like(self.NumImpacts) * self.bImpact_bounds[1]
+        else:
+            # If bImpact_bounds is N_impacts x 2
+            self.b_low = self.bImpact_bounds[:,0]
+            self.b_high = self.bImpact_bounds[:,1]
+
         self.bImpact_bounds = bImpact_bounds
         self.vImpact_bounds = vImpact_bounds
         self.tImpactBounds = tImpactBounds
@@ -63,7 +73,9 @@ class ImpactGenerator:
         phi = jax.random.uniform(minval=self.phi_bounds[0],maxval=self.phi_bounds[1],key=keys[0],shape=(self.NumImpacts,))
         beta = jax.random.uniform(minval=self.beta_bounds[0],maxval=self.beta_bounds[1],key=keys[1],shape=(self.NumImpacts,))
         gamma = jax.random.uniform(minval=self.gamma_bounds[0],maxval=self.gamma_bounds[1],key=keys[2],shape=(self.NumImpacts,))
-        bImpact = jax.random.uniform(minval=self.bImpact_bounds[0],maxval=self.bImpact_bounds[1],key=keys[3],shape=(self.NumImpacts,))
+        
+        bImpact = jax.random.uniform(minval=self.b_low,maxval=self.b_high,key=keys[3],shape=(self.NumImpacts,))
+        #bImpact = jax.random.uniform(minval=self.bImpact_bounds[0],maxval=self.bImpact_bounds[1],key=keys[3],shape=(self.NumImpacts,))
         vImpact = jax.random.uniform(minval=self.vImpact_bounds[0],maxval=self.vImpact_bounds[1],key=keys[4],shape=(self.NumImpacts,))
         
         t_sample = jnp.linspace(self.tImpactBounds[0], self.tImpactBounds[1], 10_000)

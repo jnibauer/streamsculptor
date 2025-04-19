@@ -164,3 +164,45 @@ def custom_release_model(pos_prog=None, vel_prog=None, pos_rel=None, vel_rel=Non
     return pos_init, vel_init
 
 
+@partial(jax.jit,static_argnums=(2,))
+def computed_binned_track(stream: jnp.ndarray, phi1: jnp.ndarray, bins=20):
+    """
+    Compute the binned track of the stream based on the phase-space coordinates.
+    Assumes stream is in the form of a 2D array with shape (N, 6) where N is the number of particles.
+    phi1 is a 1D array of the same length as the number of particles in the stream.
+    """
+    # bin the stream in phi1 and compute the mean phase-space position in phi1 bins
+    phi1_bins = jnp.linspace(jnp.min(phi1), jnp.max(phi1), bins)
+    phi1_digitized = jnp.digitize(phi1, phi1_bins)
+
+    # compute mean pos in each bin by scanning over bins
+    def compute_bin_mean(carry, bin_idx):
+        stream, phi1_digitized = carry
+        mask = phi1_digitized == bin_idx
+        bin_count = mask.sum()
+        # Filter the elements using jnp.where
+        masked_stream = jnp.where(mask[:, None], stream, jnp.nan)
+        bin_mean = jnp.where(bin_count > 0, jnp.nanmean(masked_stream, axis=0), jnp.zeros(6))
+        return carry, bin_mean
+
+    _, bin_means = jax.lax.scan(
+        compute_bin_mean, 
+        (stream, phi1_digitized), 
+        jnp.arange(len(phi1_bins) - 1)
+    )
+    bin_means = jnp.where(bin_means == 0, jnp.nan, bin_means)   
+    return bin_means
+
+@partial(jax.jit,static_argnums=(2,))
+def compute_stream_length(stream: jnp.ndarray, phi1: jnp.ndarray, bins=20):
+    """
+    Compute the length of the stream based on the phase-space coordinates.
+    Assumes stream is in the form of a 2D array with shape (N, 6) where N is the number of particles.
+    phi1 is a 1D array of the same length as the number of particles in the stream.
+    """
+    bin_means = computed_binned_track(stream, phi1, bins)
+    # Calculate the segment lengths between consecutive bin means (position only)
+    segment_lengths = jnp.linalg.norm(bin_means[:,:3][1:] - bin_means[:,:3][:-1], axis=1)
+
+    # Return the total length of the stream
+    return jnp.nansum(segment_lengths)

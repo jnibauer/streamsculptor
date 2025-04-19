@@ -3,11 +3,12 @@ import jax.numpy as jnp
 from functools import partial
 from astropy import units as u
 import equinox as eqx
+from streamsculptor import compute_stream_length
 
 class ImpactGenerator:
     def __init__(self, pot=None, tobs=None, stream=None, stream_phi1=None, phi1window=.1, NumImpacts=1,
     phi_bounds=[0,jnp.pi],beta_bounds=[0,jnp.pi/2],gamma_bounds=[0,jnp.pi/2],bImpact_bounds=[0,1.0],
-    vImpact_bounds=[-400.0*(u.km/u.s).to(u.kpc/u.Myr),400.0*(u.km/u.s).to(u.kpc/u.Myr)], tImpactBounds=[-4000.,0.0], phi1_bounds=None, seednum=0):
+    vImpact_bounds=[-400.0*(u.km/u.s).to(u.kpc/u.Myr),400.0*(u.km/u.s).to(u.kpc/u.Myr)], tImpactBounds=[-4000.,0.0], phi1_bounds=None, stream_length=None,seednum=0):
         """
         pot: potential function
         stream: phase-space coordinates of stream particles, N x 6 array
@@ -29,6 +30,7 @@ class ImpactGenerator:
         self.phi1window = phi1window
         self.NumImpacts = NumImpacts
         self.tobs = tobs
+        self.stream_length = stream_length
         if phi1_bounds is None:
             self.phi1_bounds = [jnp.min(stream_phi1), jnp.max(stream_phi1)]
         else:
@@ -41,8 +43,13 @@ class ImpactGenerator:
         self.vImpact_bounds = vImpact_bounds
         self.tImpactBounds = tImpactBounds
         self.seednum = seednum
-        
-    #@eqx.filter_jit
+
+        if self.stream_length is None:
+            length = compute_stream_length(stream=self.stream, phi1=self.stream_phi1)
+            self.growth_rate = length / jnp.max(jnp.abs(jnp.array(self.tImpactBounds)))  # length / time
+        else:
+            self.growth_rate = self.stream_length / jnp.max(jnp.abs(jnp.array(self.tImpactBounds)))  
+    
     @partial(jax.jit, static_argnums=(0,))
     def sample_impact_params(self):
         """
@@ -58,7 +65,12 @@ class ImpactGenerator:
         gamma = jax.random.uniform(minval=self.gamma_bounds[0],maxval=self.gamma_bounds[1],key=keys[2],shape=(self.NumImpacts,))
         bImpact = jax.random.uniform(minval=self.bImpact_bounds[0],maxval=self.bImpact_bounds[1],key=keys[3],shape=(self.NumImpacts,))
         vImpact = jax.random.uniform(minval=self.vImpact_bounds[0],maxval=self.vImpact_bounds[1],key=keys[4],shape=(self.NumImpacts,))
-        tImpact = jax.random.uniform(minval=self.tImpactBounds[0],maxval=self.tImpactBounds[1],key=keys[5],shape=(self.NumImpacts,))
+        
+        t_sample = jnp.linspace(self.tImpactBounds[0], self.tImpactBounds[1], 10_000)
+        prob_timpact = self.growth_rate*(t_sample + jnp.abs(self.tImpactBounds[0]))
+        prob_timpact = prob_timpact / jnp.sum(prob_timpact)
+        tImpact = jax.random.choice(key=keys[5], a=t_sample, shape=(self.NumImpacts,), p=prob_timpact, replace=True)
+        #tImpact = jax.random.uniform(minval=self.tImpactBounds[0],maxval=self.tImpactBounds[1],key=keys[5],shape=(self.NumImpacts,))
         phi1_samples = jax.random.uniform(minval=self.phi1_bounds[0],maxval=self.phi1_bounds[1],key=keys[6],shape=(self.NumImpacts,))
         return {"phi":phi, "beta":beta, "gamma":gamma, "bImpact":bImpact, "vImpact":vImpact, 'tImpact':tImpact, 'phi1_samples':phi1_samples}
 

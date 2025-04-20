@@ -366,14 +366,14 @@ class MW_LMC_Potential(Potential):
         LMC_motion_dict = jnp.load(data_path_LMC, allow_pickle=True).item()
         
         # LMC spatial track
-        self.LMC_x = lambda x: jnp.interp(x=x,xp=LMC_motion_dict['flip_tsave'],fp=LMC_motion_dict['flip_trajLMC'][:,0])#interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,0], method='cubic2')
-        self.LMC_y = lambda x: jnp.interp(x=x,xp=LMC_motion_dict['flip_tsave'],fp=LMC_motion_dict['flip_trajLMC'][:,1])#= #interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,1], method='cubic2')
-        self.LMC_z = lambda x: jnp.interp(x=x,xp=LMC_motion_dict['flip_tsave'],fp=LMC_motion_dict['flip_trajLMC'][:,2])#= #interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,2], method='cubic2')
+        self.LMC_x = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,0], method='cubic2')
+        self.LMC_y = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,1], method='cubic2')
+        self.LMC_z = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,2], method='cubic2')
 
         # MW velocity track
-        self.velocity_func_x = lambda x: jnp.interp(x=x,xp=MW_motion_dict['flip_tsave'],fp=MW_motion_dict['flip_traj'][:,3])#= interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,3], method='cubic2')
-        self.velocity_func_y = lambda x: jnp.interp(x=x,xp=MW_motion_dict['flip_tsave'],fp=MW_motion_dict['flip_traj'][:,4])#= interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,4], method='cubic2')
-        self.velocity_func_z = lambda x: jnp.interp(x=x,xp=MW_motion_dict['flip_tsave'],fp=MW_motion_dict['flip_traj'][:,5])#= interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,5], method='cubic2')
+        self.velocity_func_x = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,3], method='cubic2')
+        self.velocity_func_y = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,4], method='cubic2')
+        self.velocity_func_z = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,5], method='cubic2')
 
         # Create a simple but realistic model of the Milky Way with a bulge, a single disk,
         # and a spherical dark halo

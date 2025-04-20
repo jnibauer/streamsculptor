@@ -112,6 +112,37 @@ def gen_stream_vmapped_with_pert(pot_base=None, pot_pert=None, ts=None, prog_w0=
     return jax.vmap(single_particle_integrate,in_axes=(0,0,0,0,0,))(particle_ids,pos_close_arr[:-1], pos_far_arr[:-1], vel_close_arr[:-1], 
     vel_far_arr[:-1])
 
+#@eqx.filter_jit
+@partial(jax.jit,static_argnames=('pot_base','pot_pert','solver','max_steps','rtol','atol','dtmin'))
+def gen_stream_vmapped_with_pert_fixed_prog(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, seed_num=None, solver=diffrax.Dopri5(scan_kind='bounded'), kval_arr=1.0,max_steps=10_000,rtol=1e-7,atol=1e-7,dtmin=0.1):
+    """
+    Generate perturbed stream with vmap. Assume the progenitor's orbit is unperturbed, i.e. Bovy+2017 J0 progenitor is invariant to perturbations. This simplfies impact sampling.
+    """
+    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = pot_base.gen_stream_ics(ts=ts, prog_w0=prog_w0, Msat=Msat, seed_num=seed_num, solver=solver, kval_arr=kval_arr, max_steps=max_steps, rtol=rtol, atol=atol, dtmin=dtmin)
+    pot_total_lst = [pot_base, pot_pert]
+    pot_total = potential.Potential_Combine(potential_list=pot_total_lst, units=usys)
+    orb_integrator = lambda w0, ts: pot_total.integrate_orbit(w0=w0, ts=ts, solver=solver,max_steps=max_steps, rtol=rtol, atol=atol, dtmin=dtmin).ys[-1]
+    orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
+    @jax.jit
+    def single_particle_integrate(particle_number,pos_close_curr,pos_far_curr,vel_close_curr,vel_far_curr):
+        curr_particle_w0_close = jnp.hstack([pos_close_curr,vel_close_curr])
+        curr_particle_w0_far = jnp.hstack([pos_far_curr,vel_far_curr])
+        t_release = ts[particle_number]
+        t_final = ts[-1]
+        ts_arr = jnp.array([t_release,t_final])
+        
+        curr_particle_loc = jnp.vstack([curr_particle_w0_close,curr_particle_w0_far])
+        w_particle = orb_integrator_mapped(curr_particle_loc, ts_arr)
+        w_particle_close = w_particle[0]
+        w_particle_far =   w_particle[1]
+
+        return w_particle_close, w_particle_far
+    particle_ids = jnp.arange(len(pos_close_arr)-1)
+    
+    return jax.vmap(single_particle_integrate,in_axes=(0,0,0,0,0,))(particle_ids,pos_close_arr[:-1], pos_far_arr[:-1], vel_close_arr[:-1], 
+    vel_far_arr[:-1])
+
+
 
 #@eqx.filter_jit
 @partial(jax.jit,static_argnames=('pot_base','pot_pert','solver','max_steps','rtol','atol','dtmin'))

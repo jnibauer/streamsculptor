@@ -210,7 +210,7 @@ class Potential:
         # if kval_arr is a scalar, then we assume the default values of kvals
         pred = jnp.isscalar(kval_arr)
         def true_func():
-            return jnp.array([2.0, 0.3, 0.0, 0.0, 0.5, 0.5, 0.5, 0.5])
+            return jnp.array([2.0, 0.3, 0.0, 0.0, 0.4, 0.4, 0.5, 0.5]) #jnp.array([2.0, 0.3, 0.0, 0.0, 0.5, 0.5, 0.5, 0.5])#
         def false_func():
             return jnp.ones(8)*kval_arr
         kval_arr = jax.lax.cond(pred, true_func, false_func)

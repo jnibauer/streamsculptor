@@ -14,9 +14,10 @@ jax.config.update("jax_enable_x64", True)
 from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTerminatingEvent, DirectAdjoint, RecursiveCheckpointAdjoint, ConstantStepSize, Euler, StepTo
 import diffrax
 import equinox as eqx
+import interpax
+
 
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
-
 @jax.jit
 def eval_dense_stream(t_eval=None, dense_stream=None):
     """
@@ -237,3 +238,160 @@ def compute_stream_length(stream: jnp.ndarray, phi1: jnp.ndarray, bins=20):
 
     # Return the total length of the stream
     return jnp.nansum(segment_lengths)
+
+
+
+@partial(jax.jit,static_argnums=(0,))
+def release_model_Chen25(   pot_base: callable,
+                            key: jax.random.PRNGKey,
+                            x: jnp.ndarray,
+                            v: jnp.ndarray,
+                            Msat: float,
+                            t: float,
+                            ):
+    
+    r_tidal = pot_base.tidalr(x,v,Msat,t)
+    mean = jnp.array([1.6, -30, 0, 1, 20, 0])
+    cov = jnp.array([
+        [0.1225,   0,   0, 0, -4.9,   0],
+        [     0, 529,   0, 0,    0,   0],
+        [     0,   0, 144, 0,    0,   0],
+        [     0,   0,   0, 0,    0,   0],
+        [  -4.9,   0,   0, 0,  400,   0],
+        [     0,   0,   0, 0,    0, 484],
+    ])
+
+    # x_new-hat
+    r = jnp.linalg.norm(x)
+    x_new_hat = x / r
+
+    # z_new-hat
+    L_vec = jnp.cross(x, v)
+    z_new_hat = L_vec / jnp.linalg.norm(L_vec)
+
+    # y_new-hat
+    phi_vec = v - jnp.sum(v * x_new_hat) * x_new_hat
+    y_new_hat = phi_vec / jnp.linalg.norm(phi_vec)
+
+    posvel = jax.random.multivariate_normal(
+            key, mean, cov, shape=r_tidal.shape, method="svd"
+        )
+    
+    
+    Dr = posvel.at[0].get() * r_tidal
+
+    v_esc = jnp.sqrt(2 * pot_base._G * Msat / Dr)
+    Dv = posvel.at[3].get() * v_esc
+
+    # convert degrees to radians
+    phi = posvel.at[1].get() * 0.017453292519943295
+    theta = posvel.at[2].get() * 0.017453292519943295
+    alpha = posvel.at[4].get() * 0.017453292519943295
+    beta = posvel.at[5].get() * 0.017453292519943295
+
+    ctheta, stheta = jnp.cos(theta), jnp.sin(theta)
+    cphi, sphi = jnp.cos(phi), jnp.sin(phi)
+    calpha, salpha = jnp.cos(alpha), jnp.sin(alpha)
+    cbeta, sbeta = jnp.cos(beta), jnp.sin(beta)
+    # Trailing arm
+    x_trail = (
+        x
+        + (Dr * ctheta * cphi) * x_new_hat
+        + (Dr * ctheta * sphi) * y_new_hat
+        + (Dr * stheta) * z_new_hat
+    )
+    v_trail = (
+        v
+        + (Dv * cbeta * calpha) * x_new_hat
+        + (Dv * cbeta * salpha) * y_new_hat
+        + (Dv * sbeta) * z_new_hat
+        )
+    
+    # Leading arm
+    x_lead = (
+        x
+        - (Dr * ctheta * cphi) * x_new_hat
+        - (Dr * ctheta * sphi) * y_new_hat
+        + (Dr * stheta) * z_new_hat
+    )
+    v_lead = (
+        v
+        - (Dv * cbeta * calpha) * x_new_hat
+        - (Dv * cbeta * salpha) * y_new_hat
+        + (Dv * sbeta) * z_new_hat
+    )
+
+    return x_lead, x_trail, v_lead, v_trail
+
+@partial(jax.jit,static_argnames=('pot_base','solver','rtol','atol','max_steps'))
+def gen_stream_ics_Chen25(pot_base=None, ts=None, prog_w0=None, Msat=None, key=None, solver=diffrax.Dopri5(scan_kind='bounded'), rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000):
+    ws_jax_out = pot_base.integrate_orbit(w0=prog_w0,ts=ts,solver=solver, rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps)
+    ws_jax = ws_jax_out.ys
+    Msat = Msat*jnp.ones(len(ts))
+
+    @jax.jit
+    def body_func(i, key):
+        """
+        body function to vmap over
+        """
+        pos_close_new, pos_far_new, vel_close_new, vel_far_new = release_model_Chen25(      pot_base=pot_base,
+                                                                                            x=ws_jax[i,:3],
+                                                                                            v=ws_jax[i,3:],
+                                                                                            Msat=Msat[i], 
+                                                                                            t=ts[i], 
+                                                                                            key=key)
+        return [pos_close_new, pos_far_new, vel_close_new, vel_far_new]
+    
+        
+    iterator_arange = jnp.arange(len(ts))
+    keys = jax.random.split(key, len(ts))
+    all_states = jax.vmap(body_func)(iterator_arange, keys)
+    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = all_states
+
+    return [pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr], ws_jax_out
+
+@partial(jax.jit,static_argnames=('pot_base','solver','rtol','atol','max_steps', 'throw','prog_pot'))
+def gen_stream_vmapped_Chen25(  pot_base: callable, 
+                                ts: jnp.array, 
+                                prog_w0: jnp.array, 
+                                Msat: float, 
+                                key: jax.random.PRNGKey, 
+                                solver=diffrax.Dopri5(scan_kind='bounded'),
+                                rtol=1e-7, 
+                                atol=1e-7, 
+                                dtmin=0.3,
+                                dtmax=None,
+                                max_steps=10_000, 
+                                throw=False,
+                                prog_pot=potential.PlummerPotential(m=0.0, r_s=1.0,units=usys)):
+    """
+    Generate stellar stream by vmapping over the release model/integration. Better for GPU usage.
+    """
+    stream_ics, orb_fwd = gen_stream_ics_Chen25(pot_base=pot_base, ts=ts, prog_w0=prog_w0, Msat=Msat, key=key, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax, max_steps=max_steps)
+    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = stream_ics
+    
+    # Interpolate progenitor forward. This is pointless when prog_pot is Null (m=0), but will not break anything. 
+    prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
+    prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
+    pot_tot = potential.Potential_Combine(potential_list=[pot_base, prog_pot_translating], units=usys)
+    
+    orb_integrator = lambda w0, ts: pot_tot.integrate_orbit(w0=w0, ts=ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps, throw=throw).ys[-1]
+    orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
+    @jax.jit
+    def single_particle_integrate(particle_number,pos_close_curr,pos_far_curr,vel_close_curr,vel_far_curr):
+        curr_particle_w0_close = jnp.hstack([pos_close_curr,vel_close_curr])
+        curr_particle_w0_far = jnp.hstack([pos_far_curr,vel_far_curr])
+        t_release = ts[particle_number]
+        t_final = ts[-1]
+        ts_arr = jnp.array([t_release,t_final])
+        
+        curr_particle_loc = jnp.vstack([curr_particle_w0_close,curr_particle_w0_far])
+        w_particle = orb_integrator_mapped(curr_particle_loc, ts_arr)
+        w_particle_close = w_particle[0]
+        w_particle_far =   w_particle[1]
+
+        return w_particle_close, w_particle_far
+    particle_ids = jnp.arange(len(pos_close_arr)-1)
+    
+    return jax.vmap(single_particle_integrate,in_axes=(0,0,0,0,0,))(particle_ids,pos_close_arr[:-1], pos_far_arr[:-1], vel_close_arr[:-1], 
+    vel_far_arr[:-1])

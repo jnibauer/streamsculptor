@@ -350,6 +350,36 @@ def gen_stream_ics_Chen25(pot_base=None, ts=None, prog_w0=None, Msat=None, key=N
 
     return [pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr], ws_jax_out
 
+@partial(jax.jit,static_argnames=('pot_base','pot_pert','solver','rtol','atol','max_steps'))
+def gen_stream_ics_pert_Chen25(pot_base=None, pot_pert=None, ts=None, prog_w0=None, Msat=None, key=None, solver=diffrax.Dopri5(scan_kind='bounded'), rtol=1e-7, atol=1e-7, dtmin=0.3,dtmax=None,max_steps=10_000):
+    pot_total_lst = [pot_base, pot_pert]
+    pot_total = potential.Potential_Combine(potential_list=pot_total_lst, units=usys)
+    
+    ws_jax_out = pot_total.integrate_orbit(w0=prog_w0,ts=ts,solver=solver, rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps)
+    ws_jax = ws_jax_out.ys
+    Msat = Msat*jnp.ones(len(ts))
+
+    @jax.jit
+    def body_func(i, key):
+        """
+        body function to vmap over
+        """
+        pos_close_new, pos_far_new, vel_close_new, vel_far_new = release_model_Chen25(      pot_base=pot_base,
+                                                                                            x=ws_jax[i,:3],
+                                                                                            v=ws_jax[i,3:],
+                                                                                            Msat=Msat[i], 
+                                                                                            t=ts[i], 
+                                                                                            key=key)
+        return [pos_close_new, pos_far_new, vel_close_new, vel_far_new]
+    
+        
+    iterator_arange = jnp.arange(len(ts))
+    keys = jax.random.split(key, len(ts))
+    all_states = jax.vmap(body_func)(iterator_arange, keys)
+    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = all_states
+
+    return [pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr], ws_jax_out
+
 @partial(jax.jit,static_argnames=('pot_base','solver','rtol','atol','max_steps', 'throw','prog_pot'))
 def gen_stream_vmapped_Chen25(  pot_base: callable, 
                                 ts: jnp.array, 
@@ -376,6 +406,51 @@ def gen_stream_vmapped_Chen25(  pot_base: callable,
     pot_tot = potential.Potential_Combine(potential_list=[pot_base, prog_pot_translating], units=usys)
     
     orb_integrator = lambda w0, ts: pot_tot.integrate_orbit(w0=w0, ts=ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps, throw=throw).ys[-1]
+    orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
+    @jax.jit
+    def single_particle_integrate(particle_number,pos_close_curr,pos_far_curr,vel_close_curr,vel_far_curr):
+        curr_particle_w0_close = jnp.hstack([pos_close_curr,vel_close_curr])
+        curr_particle_w0_far = jnp.hstack([pos_far_curr,vel_far_curr])
+        t_release = ts[particle_number]
+        t_final = ts[-1]
+        ts_arr = jnp.array([t_release,t_final])
+        
+        curr_particle_loc = jnp.vstack([curr_particle_w0_close,curr_particle_w0_far])
+        w_particle = orb_integrator_mapped(curr_particle_loc, ts_arr)
+        w_particle_close = w_particle[0]
+        w_particle_far =   w_particle[1]
+
+        return w_particle_close, w_particle_far
+    particle_ids = jnp.arange(len(pos_close_arr)-1)
+    
+    return jax.vmap(single_particle_integrate,in_axes=(0,0,0,0,0,))(particle_ids,pos_close_arr[:-1], pos_far_arr[:-1], vel_close_arr[:-1], 
+    vel_far_arr[:-1])
+
+@partial(jax.jit,static_argnames=('pot_base','pot_pert','prog_pot','solver','max_steps','rtol','atol','dtmin'))
+def gen_stream_vmapped_with_pert_Chen25(pot_base=None, 
+                                        pot_pert=None, 
+                                        prog_pot=potential.PlummerPotential(m=0.0, r_s=1.0,units=usys),
+                                        ts=None, 
+                                        prog_w0=None, 
+                                        Msat=None, 
+                                        key=None, 
+                                        solver=diffrax.Dopri5(scan_kind='bounded'),
+                                        max_steps=10_000,
+                                        rtol=1e-7,
+                                        atol=1e-7,
+                                        dtmin=0.1):
+    """
+    Generate perturbed stream with vmap. Better for GPU usage.
+    """
+    stream_ics, orb_fwd = gen_stream_ics_pert_Chen25(pot_base=pot_base, pot_pert=pot_pert, ts=ts, prog_w0=prog_w0, Msat=Msat, key=key, solver=solver,max_steps=max_steps,rtol=rtol,atol=atol,dtmin=dtmin)
+    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = stream_ics
+    
+    # Interpolate progenitor forward. This is pointless when prog_pot is Null (m=0), but will not break anything. 
+    prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
+    prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
+    pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_pert, prog_pot_translating], units=usys)
+    # Integrate progenitor in full potential: base + prog + perturbation
+    orb_integrator = lambda w0, ts: pot_total.integrate_orbit(w0=w0, ts=ts, solver=solver,max_steps=max_steps, rtol=rtol, atol=atol, dtmin=dtmin).ys[-1]
     orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
     @jax.jit
     def single_particle_integrate(particle_number,pos_close_curr,pos_far_curr,vel_close_curr,vel_far_curr):

@@ -3,44 +3,50 @@ import jax.numpy as jnp
 from functools import partial
 from astropy import units as u
 import equinox as eqx
+import diffrax
 from streamsculptor import compute_stream_length
 
 class ImpactGenerator:
-    def __init__(self, pot=None, tobs=None, stream=None, stream_phi1=None, phi1window=.1, NumImpacts=1,
-    phi_bounds=[0,jnp.pi],beta_bounds=[0,jnp.pi/2],gamma_bounds=[0,jnp.pi/2],bImpact_bounds=[0,1.0],
-    vImpact_bounds=[-400.0*(u.km/u.s).to(u.kpc/u.Myr),400.0*(u.km/u.s).to(u.kpc/u.Myr)], tImpactBounds=[-4000.,0.0], phi1_bounds=None, stream_length=None,seednum=0):
-        """
-        pot: potential function
-        stream: phase-space coordinates of stream particles, N x 6 array
-        stream_phi1: phi1 values of stream particles, 1D array
-        phi1window: scalar width of window in phi1 in which to average stream particles (deg)
-        tobs: observation time
-        bImpact_bounds: can be either length 2 array w/ lower and upper impact param, or N_impact x 2 array with lower and upper impact param for each impact
-        ----------------------------------------------------------------------------------------
-        Example usage:
-        ->  stream = jnp.vstack([lead,trail])
-        ->  imp_obj = ImpactGenerator(pot=pot_NFW, tobs=0.0, stream=stream, stream_phi1=stream[:,0],NumImpacts=20)
-        ->  imp_obj.sample_impact_params()
-        ->  out = imp_obj.get_subhalo_ImpactParams()
-        ->  CartImpact = out['CartesianImpactParams']
-        ->  ImpactFrameParams = out['ImpactFrameParams']
-        """
+    """
+    Impact generator using formalisms of Yoon+2011, Erkal+2016.
+    """
+    def __init__(self,
+                 pot: callable,
+                 tobs: jnp.array,
+                 stream: jnp.ndarray,
+                 stream_phi1: jnp.array,
+                 stripping_times: jnp.array,
+                 phi1window  = 0.1,
+                 NumImpacts = 1,
+                 tImpactBounds = [-4000.0, 0.0],
+                 bImpact_bounds = [0,1.0],
+                 sigma = (180*u.km/u.s).to(u.kpc/u.Myr).value,
+                 phi1_bounds = None,
+                 phi1_exclude = [1.,1.],
+                 stream_length = None,
+                 seednum = 0):
+
         self.pot = pot
         self.stream = stream
         self.stream_phi1 = stream_phi1
+        self.stripping_times = stripping_times
         self.phi1window = phi1window
         self.NumImpacts = NumImpacts
         self.tobs = tobs
         self.stream_length = stream_length
         self.bImpact_bounds = bImpact_bounds
+        self.tImpactBounds = tImpactBounds
+        self.sigma = sigma
+        self.seednum = seednum
+        self.phi1_exclude = phi1_exclude
+        self.keys = jax.random.split(jax.random.PRNGKey(seednum), 7)
+
+        
         if phi1_bounds is None:
             self.phi1_bounds = [jnp.min(stream_phi1), jnp.max(stream_phi1)]
         else:
             self.phi1_bounds = phi1_bounds
-        # Bounds for impact parameters
-        self.phi_bounds = phi_bounds
-        self.beta_bounds = beta_bounds
-        self.gamma_bounds = gamma_bounds
+        
         if len(self.bImpact_bounds) == 2:
             self.b_low = jnp.ones_like(self.NumImpacts) * self.bImpact_bounds[0]
             self.b_high = jnp.ones_like(self.NumImpacts) * self.bImpact_bounds[1]
@@ -49,16 +55,35 @@ class ImpactGenerator:
             self.b_low = self.bImpact_bounds[:,0]
             self.b_high = self.bImpact_bounds[:,1]
 
-        self.bImpact_bounds = bImpact_bounds
-        self.vImpact_bounds = vImpact_bounds
-        self.tImpactBounds = tImpactBounds
-        self.seednum = seednum
-
         if self.stream_length is None:
             length = compute_stream_length(stream=self.stream, phi1=self.stream_phi1)
             self.growth_rate = length / jnp.max(jnp.abs(jnp.array(self.tImpactBounds)))  # length / time
         else:
             self.growth_rate = self.stream_length / jnp.max(jnp.abs(jnp.array(self.tImpactBounds)))  
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def w_parallel_sample(self, vs):
+        """
+        Probability density function for w_parallel, the component of relative subhalo velocity parallel to the stream.
+        vs: scalar velocity of the stream patch 
+        """
+        return jax.random.normal(key=self.keys[0], shape=(self.NumImpacts,)) * self.sigma - vs
+
+    @partial(jax.jit, static_argnums=(0,))
+    def w_perpendicular_sample(self):
+        """
+        Probability density function for w_perpendicular, the component of relative subhalo velocity perpendicular to the stream.
+        """
+        prefac = jnp.sqrt(2 / jnp.pi) / self.sigma**3
+        prob_func = lambda w_perp: prefac * (w_perp**2) * jnp.exp(-w_perp**2 / (2*self.sigma**2))
+        w_perp_vals = jnp.linspace(-5*self.sigma, 5*self.sigma, 1000)
+        prob_w_perp = prob_func(w_perp_vals)
+        prob_w_perp /= jnp.sum(prob_w_perp)
+        w_perp_samples = jax.random.choice(key=self.keys[1], a=w_perp_vals, shape=(self.NumImpacts,), p=prob_w_perp, replace=True)
+        return w_perp_samples
+
+    
     
     @partial(jax.jit, static_argnums=(0,))
     def sample_impact_params(self):
@@ -67,26 +92,30 @@ class ImpactGenerator:
         Returns: dictionary of impact parameters
         Angles in radians, bImpact in kpc, vImpact in kpc/Myr
         """
-        key = jax.random.PRNGKey(self.seednum)
-        keys = jax.random.split(key, 7)
-
-        phi = jax.random.uniform(minval=self.phi_bounds[0],maxval=self.phi_bounds[1],key=keys[0],shape=(self.NumImpacts,))
-        beta = jax.random.uniform(minval=self.beta_bounds[0],maxval=self.beta_bounds[1],key=keys[1],shape=(self.NumImpacts,))
-        gamma = jax.random.uniform(minval=self.gamma_bounds[0],maxval=self.gamma_bounds[1],key=keys[2],shape=(self.NumImpacts,))
+        key = self.keys[-1]
+        keys = jax.random.split(key, 4)
         
-        bImpact = jax.random.uniform(minval=self.b_low,maxval=self.b_high,key=keys[3],shape=(self.NumImpacts,))
-        #bImpact = jax.random.uniform(minval=self.bImpact_bounds[0],maxval=self.bImpact_bounds[1],key=keys[3],shape=(self.NumImpacts,))
-        vImpact = jax.random.uniform(minval=self.vImpact_bounds[0],maxval=self.vImpact_bounds[1],key=keys[4],shape=(self.NumImpacts,))
-        
+        bImpact = jax.random.uniform(minval=self.b_low,maxval=self.b_high,key=keys[0],shape=(self.NumImpacts,))
+    
         t_sample = jnp.linspace(self.tImpactBounds[0], self.tImpactBounds[1], 10_000)
         prob_timpact = self.growth_rate*(t_sample + jnp.abs(self.tImpactBounds[0]))
         prob_timpact = prob_timpact / jnp.sum(prob_timpact)
-        tImpact = jax.random.choice(key=keys[5], a=t_sample, shape=(self.NumImpacts,), p=prob_timpact, replace=True)
-        #tImpact = jax.random.uniform(minval=self.tImpactBounds[0],maxval=self.tImpactBounds[1],key=keys[5],shape=(self.NumImpacts,))
-        phi1_samples = jax.random.uniform(minval=self.phi1_bounds[0],maxval=self.phi1_bounds[1],key=keys[6],shape=(self.NumImpacts,))
-        return {"phi":phi, "beta":beta, "gamma":gamma, "bImpact":bImpact, "vImpact":vImpact, 'tImpact':tImpact, 'phi1_samples':phi1_samples}
+        tImpact = jax.random.choice(key=keys[1], a=t_sample, shape=(self.NumImpacts,), p=prob_timpact, replace=True)
+        
+        def phi1_exclude_provided(phi1_exclude):
+            seg1 = jnp.linspace(self.phi1_bounds[0], phi1_exclude[0], 1000)
+            seg2 = jnp.linspace(phi1_exclude[1], self.phi1_bounds[1], 1000)
+            phi1_eval = jnp.hstack([seg1, seg2])
+            return jax.random.choice(key=keys[2], a=phi1_eval, shape=(self.NumImpacts,), replace=True)        
+        def phi1_exclude_not_provided(phi1_exclude):
+            return jax.random.uniform(minval=self.phi1_bounds[0], maxval=self.phi1_bounds[1], key=keys[2], shape=(self.NumImpacts,))
+        phi1_exclude_diff = self.phi1_exclude[1] - self.phi1_exclude[0] 
+        exclude_bool = jnp.abs(phi1_exclude_diff) > 0 #if gtr than zero an interval w/ support is provided
+        phi1_samples = jax.lax.cond(exclude_bool, phi1_exclude_provided, phi1_exclude_not_provided, self.phi1_exclude)
+        #phi1_samples = jax.random.uniform(minval=self.phi1_bounds[0],maxval=self.phi1_bounds[1],key=keys[2],shape=(self.NumImpacts,))
+        perp_angle_samples = jax.random.uniform(minval=0, maxval=2*jnp.pi, key=keys[3], shape=(self.NumImpacts,))
+        return { "bImpact":bImpact, 'tImpact':tImpact, 'phi1_samples': phi1_samples, 'perp_angle': perp_angle_samples}
 
-    #@eqx.filter_jit
     @partial(jax.jit, static_argnums=(0,))
     def get_particle_mean(self, phi1_0=None):
         """
@@ -96,13 +125,15 @@ class ImpactGenerator:
         phi1low, phi1high = phi1_0-self.phi1window, phi1_0 + self.phi1window
         bool_in = (self.stream_phi1 > phi1low) & (self.stream_phi1 < phi1high)
         bool_in = bool_in.astype(int)
-        stream_mean = jnp.sum(self.stream*bool_in[:,None], axis= 0)/jnp.sum(bool_in)                       
-        return stream_mean
+        stream_mean = jnp.sum(self.stream*bool_in[:,None], axis= 0)/jnp.sum(bool_in)   
+        # Compute mean stripping times
+        mean_tstrip = jnp.sum(self.stripping_times * bool_in) / jnp.sum(bool_in)                  
+        return stream_mean, mean_tstrip
         
         
     #@eqx.filter_jit
     @partial(jax.jit, static_argnums=(0,))
-    def _get_subhalo_ImpactParamsCartesian(self, tobs=None, particle_mean=None, tImpact=None, bImpact=None, vImpact=None, phi=None, beta=None, gamma=None):
+    def _get_subhalo_ImpactParamsCartesian(self, tobs=None, particle_mean=None, tstrip_mean=None, tImpact=None, bImpact=None, perp_angle=None, subidx=None):
         """
         Get impact parameters in Cartesian coordinates
         _____________________________________________________
@@ -117,18 +148,13 @@ class ImpactGenerator:
         Time-space Parameters to define impact: 
         tImpact – time of impact 
         bImpact – impact parameter 
-        vImpact – impact velocity
-        _____________________________________________________
-        Angle parameters:
-        phi – spherical angle between B-axis and location of impact 
-        beta - azimuthal angle of impact velocity vector in TN plane
-        gamma - angle of impact velocity vector from TN plane
+        perp_angle – angle [rad] of perpendicular velocity vector from TN plane (and in the N-B plane)
         _____________________________________________________
         Returns:
         ImpactW and bImpact_hat [unit vector impact location from backwards integrated patch]
         """
-        
-        W0 = self.pot.integrate_orbit(w0=particle_mean,t0=tobs,t1=tImpact,ts=jnp.array([tImpact])).ys[0]
+        tImpact = jnp.maximum(tImpact, tstrip_mean)
+        W0 = self.pot.integrate_orbit(w0=particle_mean,t0=tobs,t1=tImpact,ts=jnp.array([tImpact]),solver=diffrax.Dopri8(),atol=1e-7,rtol=1e-7,dtmin=0.1).ys[0]
         # Define basis vecs
         T = W0[3:]
         T = T / jnp.sqrt(jnp.sum( T**2 ))
@@ -136,25 +162,27 @@ class ImpactGenerator:
         B = B / jnp.sqrt(jnp.sum( B**2 ))
         N = jnp.cross(B,T)
 
+        v_s = jnp.sqrt(jnp.sum(W0[3:]**2))
+        V_parallel = (self.w_parallel_sample(v_s)[subidx] + v_s) * T
+        V_perpendicular = self.w_perpendicular_sample()[subidx] * (-N*jnp.sin(perp_angle) + B*jnp.cos(perp_angle))
+        V_I = V_parallel + V_perpendicular
+
         # Impact unit vector (ray from integrated patch to impact location)
-        bImpact_hat =  jnp.sin(phi)*N + jnp.cos(phi)*B
+        bImpact_hat =  N*jnp.cos(perp_angle) + B*jnp.sin(perp_angle)
         # Impact location    
         X_I = W0[:3] + bImpact*bImpact_hat
-        # Impact velocity vector
-        v_hat = jnp.cos(gamma)*jnp.cos(beta)*T + jnp.cos(gamma)*jnp.sin(beta)*N + jnp.sin(gamma)*B
-        V_I = vImpact*v_hat
         return jnp.hstack([X_I,V_I]), bImpact_hat
 
-    #@partial(jax.jit,static_argnums=(0,))
     def get_subhalo_ImpactParams(self):
         """
         Get cartesian location of impactors at impact time
         """
         impact_param_dict = self.sample_impact_params()
-        particle_means = jax.vmap(self.get_particle_mean)(impact_param_dict['phi1_samples'])
+        particle_means, mean_stripping_times = jax.vmap(self.get_particle_mean)(impact_param_dict['phi1_samples'])
 
-        batch_cart_impact = lambda particle_mean, tImpact, bImpact, vImpact, phi, beta, gamma: self._get_subhalo_ImpactParamsCartesian(tobs=self.tobs, particle_mean=particle_mean, tImpact=tImpact, bImpact=bImpact, vImpact=vImpact, phi=phi, beta=beta, gamma=gamma)
-        cart_impact_params, bImpact_hat = jax.vmap(batch_cart_impact)(particle_means, impact_param_dict['tImpact'],impact_param_dict['bImpact'], impact_param_dict['vImpact'], impact_param_dict['phi'], impact_param_dict['beta'], impact_param_dict['gamma'])
+        batch_cart_impact = lambda particle_mean, tstrip_mean, tImpact, bImpact, perp_angle, subidx: self._get_subhalo_ImpactParamsCartesian(tobs=self.tobs, particle_mean=particle_mean, tstrip_mean=tstrip_mean, tImpact=tImpact, bImpact=bImpact, perp_angle=perp_angle,subidx=subidx)
+        subidx = jnp.arange(self.NumImpacts)
+        cart_impact_params, bImpact_hat = jax.vmap(batch_cart_impact)(particle_means, mean_stripping_times, impact_param_dict['tImpact'],impact_param_dict['bImpact'], impact_param_dict['perp_angle'], subidx)
 
         return {'CartesianImpactParams':cart_impact_params, 'ImpactFrameParams':impact_param_dict}
 

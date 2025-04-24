@@ -15,6 +15,7 @@ from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTe
 import diffrax
 import equinox as eqx
 import interpax
+import streamsculptor as ssc
 
 
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
@@ -470,3 +471,53 @@ def gen_stream_vmapped_with_pert_Chen25(pot_base=None,
     
     return jax.vmap(single_particle_integrate,in_axes=(0,0,0,0,0,))(particle_ids,pos_close_arr[:-1], pos_far_arr[:-1], vel_close_arr[:-1], 
     vel_far_arr[:-1])
+
+
+@partial(jax.jit,static_argnames=('pot_base','pot_pert','prog_pot','solver','max_steps','rtol','atol','dtmin'))
+def gen_stream_vmapped_with_pert_Chen25_fixed_prog(pot_base=None, 
+                                        pot_pert=None, 
+                                        prog_pot=potential.PlummerPotential(m=0.0, r_s=1.0,units=usys),
+                                        ts=None, 
+                                        prog_w0=None, 
+                                        Msat=None, 
+                                        key=None, 
+                                        solver=diffrax.Dopri5(scan_kind='bounded'),
+                                        max_steps=10_000,
+                                        rtol=1e-7,
+                                        atol=1e-7,
+                                        dtmin=0.1):
+    """
+    Generate perturbed stream with vmap. Better for GPU usage.
+    Progenitor's orbit is unperturbed, i.e. Bovy+2017 J0 progenitor is invariant to perturbations. This simplfies impact sampling.
+    """
+    stream_ics, orb_fwd = gen_stream_ics_Chen25(pot_base=pot_base, ts=ts, prog_w0=prog_w0, Msat=Msat, key=key, solver=solver,max_steps=max_steps,rtol=rtol,atol=atol,dtmin=dtmin)
+    pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = stream_ics
+    
+    # Interpolate progenitor forward. This is pointless when prog_pot is Null (m=0), but will not break anything. 
+    prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
+    prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
+    pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_pert, prog_pot_translating], units=usys)
+    # Integrate progenitor in full potential: base + prog + perturbation
+    orb_integrator = lambda w0, ts: pot_total.integrate_orbit(w0=w0, ts=ts, solver=solver,max_steps=max_steps, rtol=rtol, atol=atol, dtmin=dtmin).ys[-1]
+    orb_integrator_mapped = jax.jit(jax.vmap(orb_integrator,in_axes=(0,None,)))
+    @jax.jit
+    def single_particle_integrate(particle_number,pos_close_curr,pos_far_curr,vel_close_curr,vel_far_curr):
+        curr_particle_w0_close = jnp.hstack([pos_close_curr,vel_close_curr])
+        curr_particle_w0_far = jnp.hstack([pos_far_curr,vel_far_curr])
+        t_release = ts[particle_number]
+        t_final = ts[-1]
+        ts_arr = jnp.array([t_release,t_final])
+        
+        curr_particle_loc = jnp.vstack([curr_particle_w0_close,curr_particle_w0_far])
+        w_particle = orb_integrator_mapped(curr_particle_loc, ts_arr)
+        w_particle_close = w_particle[0]
+        w_particle_far =   w_particle[1]
+
+        return w_particle_close, w_particle_far
+    particle_ids = jnp.arange(len(pos_close_arr)-1)
+    
+    return jax.vmap(single_particle_integrate,in_axes=(0,0,0,0,0,))(particle_ids,pos_close_arr[:-1], pos_far_arr[:-1], vel_close_arr[:-1], 
+    vel_far_arr[:-1])
+
+
+

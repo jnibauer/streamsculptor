@@ -521,3 +521,81 @@ def gen_stream_vmapped_with_pert_Chen25_fixed_prog(pot_base=None,
 
 
 
+########## Streakline model #########
+def get_Streakline_ICs(pot: callable, 
+                       prog_w0: jnp.array,
+                       Msat: float,
+                       t0: float, 
+                       t1: float, 
+                       Nstrip: int, 
+                       solver=diffrax.Dopri8(), 
+                       rtol=1e-6,
+                       atol=1e-6):
+    """
+    Generate initial conditions for a streakline stellar stream,
+    by releasing particles from L1, L2 with the same angular velocity (omega)
+    as the parent cluster.
+    """
+    ts = jnp.linspace(t0, t1, Nstrip)
+    prog_orb = pot.integrate_orbit(w0=prog_w0, ts=ts,solver=solver, rtol=rtol, atol=atol)
+    
+    L_close, L_far = jax.vmap(pot.lagrange_pts,in_axes=(0,0,None,0))(prog_orb.ys[:,:3],prog_orb.ys[:,3:],Msat, prog_orb.ts) # each is an xyz array
+
+    omega_val = jax.vmap(pot.omega)(prog_orb.ys[:,:3],prog_orb.ys[:,3:])
+
+    r = jnp.sqrt(jnp.sum(prog_orb.ys[:,:3]**2,axis=1)) 
+    r_hat = prog_orb.ys[:,:3]/r[:,None]
+    r_tidal = jax.vmap(pot.tidalr,in_axes=(0,0,None,0))(prog_orb.ys[:,:3],prog_orb.ys[:,3:],Msat, prog_orb.ts)
+
+    v_hat = prog_orb.ys[:,3:] / jnp.linalg.norm(prog_orb.ys[:,3:], axis=1)[:,None]
+
+    @partial(jax.vmap)
+    def release_velocity(q_rel, q_prog, p_prog, omega):
+        r_prog_hat = q_prog/jnp.sqrt(jnp.sum(q_prog**2))
+        p_prog_hat = p_prog/jnp.sqrt(jnp.sum(p_prog**2))
+        sintheta = jnp.linalg.norm(jnp.cross(r_prog_hat,p_prog_hat))
+        
+        
+        p_rel = omega*jnp.sqrt(jnp.sum(q_rel**2)) / sintheta
+        vel_out = p_rel*p_prog_hat
+        return vel_out
+
+    v_lead = release_velocity(L_close, prog_orb.ys[:,:3], prog_orb.ys[:,3:], omega_val)
+    v_trail =release_velocity(L_far, prog_orb.ys[:,:3], prog_orb.ys[:,3:], omega_val)
+
+    return L_close, v_lead, L_far, v_trail, ts
+
+    
+@partial(jax.jit,static_argnums=(0,5))
+def gen_streakline( pot: callable, 
+                    prog_w0: jnp.array,
+                    Msat: float,
+                    t0: float, 
+                    t1: float, 
+                    Nstrip: int, 
+                    solver=diffrax.Dopri8(), 
+                    rtol=1e-6,
+                    atol=1e-6):
+    """
+    Generate streakline stellar stream by realisng particles from L1, L2
+    with the same angular velocity (omega) as the parent cluster.
+    """
+    
+    pos_lead, vel_lead, pos_trail, vel_trail, tstrip = get_Streakline_ICs(
+                       pot=pot, 
+                       prog_w0=prog_w0,
+                       Msat=Msat,
+                       t0=t0,
+                       t1=t1,
+                       Nstrip=Nstrip,
+                       solver=solver,
+                       rtol=rtol,
+                       atol=atol
+                       )
+    orb_func = lambda w0, t0: pot.integrate_orbit(w0=w0, t0=t0, t1=t1, solver=solver, ts=jnp.array([t1]), rtol=rtol, atol=atol).ys[0]
+    w0_lead = jnp.hstack([ pos_lead, vel_lead ])
+    w0_trail = jnp.hstack([ pos_trail, vel_trail ])
+    mapped_orb_func = jax.vmap(orb_func)
+    lead = mapped_orb_func(w0_lead, tstrip)
+    trail = mapped_orb_func(w0_trail, tstrip)
+    return lead, trail

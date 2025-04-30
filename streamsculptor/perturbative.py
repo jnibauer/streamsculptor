@@ -660,11 +660,11 @@ class BaseStreamModelChen25(Potential):
 
 class GenerateMassRadiusPerturbation_Chen25(Potential):
     """
-    Class to define a perturbation object, with a *custom base stream model*
+    Class to define a perturbation object, with a *custom base stream model* from Chen25
     potiential_base: potential function for the base potential, in H_base
     potential_perturbation: gravitation potential of the perturbation(s)
-    potential_structural: defined as the derivative of the perturbing potential wrspct to the structural parameter.
-    dPhi_alpha / dstructural. For instance, dPhi_alpha(x, t) / dr.
+    BaseStreamModel: the base stream model, which is a CustomBaseStreamModel object.
+    units: units for the potential and perturbation
     """
     def __init__(self,  potential_base: callable, 
                         potential_perturbation: callable, 
@@ -751,3 +751,44 @@ class GenerateMassRadiusPerturbation_Chen25(Potential):
             return space_and_derivs
         
         return jax.lax.cond(cpu, cpu_func, gpu_func)
+
+    @partial(jax.jit, static_argnames=('self','pot_pert','solver', 'max_steps','rtol','atol'))
+    def run_nonlinear_sim(self,
+                            pot_pert = None,
+                            solver=diffrax.Dopri8(scan_kind='bounded'),
+                            rtol=1e-6,
+                            atol=1e-6,
+                            dtmin=0.05,
+                            max_steps=10_000):
+        """
+        Run the full non linear similation of the stream with perturbation, without perturbation theory.
+        Parameters:
+            pot_pert: Potential perturbation to apply to the base potential. If None, uses self.potential_perturbation.
+            solver: Diffrax solver to use for the integration.
+            rtol: Relative tolerance for the solver.
+            atol: Absolute tolerance for the solver.
+            dtmin: Minimum time step for the solver.
+            max_steps: Maximum number of steps for the solver.
+        Returns:
+            stream: Stream positions and velocities at the observation time. [Nstar x 6]
+        """
+        
+        if pot_pert is None:
+            pot_pert = self.potential_perturbation
+    
+
+        l,t = ssc.gen_stream_vmapped_with_pert_Chen25_fixed_prog(pot_base=self.potential_base,
+                                                                 pot_pert=pot_pert,
+                                                                 prog_pot=self.BaseStreamModel.prog_pot,
+                                                                 prog_w0=self.base_stream.prog_w0, 
+                                                                 ts=self.BaseStreamModel.ts, 
+                                                                 key=self.BaseStreamModel.key, 
+                                                                 Msat=self.BaseStreamModel.Msat, 
+                                                                 max_steps=max_steps,
+                                                                 atol=atol,
+                                                                 rtol=rtol, 
+                                                                 solver=solver, 
+                                                                 dtmin=dtmin)
+        stream = jnp.vstack([l,t])
+
+        return stream

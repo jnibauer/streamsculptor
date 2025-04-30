@@ -598,4 +598,4 @@ def gen_streakline( pot: callable,
     mapped_orb_func = jax.vmap(orb_func)
     lead = mapped_orb_func(w0_lead, tstrip)
     trail = mapped_orb_func(w0_trail, tstrip)
-    return lead, trail
+    return lead, trail, tstrip

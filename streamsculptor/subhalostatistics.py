@@ -54,6 +54,15 @@ class RateCalculator():
         """
         r_s_expect = self.r_s_func(log10M, concentration_fac)
         return self.b_max_fac * r_s_expect
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def db_max_dlog10M(self, log10M: jnp.array, concentration_fac=1.0):
+        """
+        db_max/dlog10M
+        """
+        M = 10**log10M
+        d_r_s_dlog10dM = 1.05 * (0.5) * ((M / 1e8)**(-0.5)) * (1e-8) * (M * jnp.log(10))
+        return self.b_max_fac * d_r_s_dlog10dM * concentration_fac
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -85,7 +94,10 @@ class RateCalculator():
         spatial_part = self.spatial_density(r)
         return mass_func_part * spatial_part
 
-   
+    @partial(jax.jit, static_argnums=(0,))
+    def nsub(self, r: jnp.array):
+        return (self.c0/self.a0) * self.spatial_density(r)
+        
 
     @partial(jax.jit, static_argnums=(0,))
     def dN_encounter_dlog10M(self, log10M: jnp.float64, normalization=1.0, slope=-1.9,concentration_fac=1.0, gamma=2.7, M_hm=0.0, beta=0.99):
@@ -96,7 +108,9 @@ class RateCalculator():
         """
         dn_dlog10M = self.dn_dlog10M(log10M=log10M, r=self.orbital_r, slope=slope, gamma=gamma, beta=beta, M_hm=M_hm)
         b_max = self.b_max_func(log10M=log10M, concentration_fac=concentration_fac)
-        integrand = b_max * dn_dlog10M * self.orbit_ts
+        db_max_dlog10M = self.db_max_dlog10M(log10M=log10M, concentration_fac=concentration_fac)
+        nsub_eval = self.nsub(r=self.orbital_r)
+        integrand = (b_max * dn_dlog10M +  db_max_dlog10M * nsub_eval) * self.orbit_ts
         prefac = jnp.sqrt(2*jnp.pi) * self.sigma * self.disk_factor * ( self.l_obs / self.t_age )
         return trapezoid(y=integrand, x=self.orbit_ts, axis=0) * prefac * normalization
 

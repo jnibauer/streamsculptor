@@ -106,7 +106,14 @@ class ImpactGenerator:
             seg1 = jnp.linspace(self.phi1_bounds[0], phi1_exclude[0], 1000)
             seg2 = jnp.linspace(phi1_exclude[1], self.phi1_bounds[1], 1000)
             phi1_eval = jnp.hstack([seg1, seg2])
-            return jax.random.choice(key=keys[2], a=phi1_eval, shape=(self.NumImpacts,), replace=True)        
+            length1 = phi1_exclude[0] - self.phi1_bounds[0]
+            length2 = self.phi1_bounds[1] - phi1_exclude[1]
+            total_length = length1 + length2
+            prob_1 = ( length1 / total_length ) * (1./len(seg1))
+            prob_2 = ( length2 / total_length ) * (1./len(seg2))
+            prob_phi1 = jnp.hstack([jnp.ones_like(seg1) * prob_1, jnp.ones_like(seg2) * prob_2])
+            return jax.random.choice(key=keys[2], a=phi1_eval, shape=(self.NumImpacts,), replace=True, p=prob_phi1)  
+                  
         def phi1_exclude_not_provided(phi1_exclude):
             return jax.random.uniform(minval=self.phi1_bounds[0], maxval=self.phi1_bounds[1], key=keys[2], shape=(self.NumImpacts,))
         phi1_exclude_diff = self.phi1_exclude[1] - self.phi1_exclude[0] 

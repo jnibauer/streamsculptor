@@ -77,7 +77,7 @@ class ImpactGenerator:
         """
         prefac = jnp.sqrt(2 / jnp.pi) / self.sigma**3
         prob_func = lambda w_perp: prefac * (w_perp**2) * jnp.exp(-w_perp**2 / (2*self.sigma**2))
-        w_perp_vals = jnp.linspace(-5*self.sigma, 5*self.sigma, 1000)
+        w_perp_vals = jnp.linspace(-7*self.sigma, 7*self.sigma, 10_000)
         prob_w_perp = prob_func(w_perp_vals)
         prob_w_perp /= jnp.sum(prob_w_perp)
         w_perp_samples = jax.random.choice(key=self.keys[1], a=w_perp_vals, shape=(self.NumImpacts,), p=prob_w_perp, replace=True)

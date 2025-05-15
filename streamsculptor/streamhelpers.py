@@ -241,6 +241,112 @@ def compute_stream_length(stream: jnp.ndarray, phi1: jnp.ndarray, bins=20):
     return jnp.nansum(segment_lengths)
 
 
+@partial(jax.jit, static_argnames=["pot"])
+def compute_length_oscillations(pot: callable,
+                                prog_today: jnp.array,
+                                first_stripped_lead: jnp.array, 
+                                first_stripped_trail: jnp.array,
+                                t_age: float,
+                                length_today: float,
+                                ):
+    """
+    Compute the time evolution of a stream's length due to orbital oscillations.
+
+    Integrates the orbits of the progenitor and its leading and trailing
+    stripped components backward in time within a specified gravitational potential.
+    It then estimates the oscillatory behavior of the stream's length over time, 
+    normalized by the present-day stream length.
+
+    Parameters
+    ----------
+    pot : callable
+        A potential object with an `integrate_orbit` method, used to evolve phase-space coordinates.
+    prog_today : jnp.array
+        The current phase-space coordinates of the progenitor (6-element array).
+    first_stripped_lead : jnp.array
+        The current phase-space coordinates of the first leading stripped star.
+    first_stripped_trail : jnp.array
+        The current phase-space coordinates of the first trailing stripped star.
+    t_age : float
+        Total time (in the past) to integrate orbits over, typically the age of the stream [same time units as pot].
+    length_today : float
+        Present-day length of the stream [same spatial units as used in pot].
+
+    Returns
+    -------
+    dict
+        A dictionary containing:
+        - `ts` : jnp.array
+            Time array (reversed, from -t_age to 0), shape (2000,)
+        - `length_func` : jnp.array
+            Stream length as a function of time, normalized to present-day length. Shape (2000,)
+
+    Notes
+    -----
+    The stream length at each time step is approximated as the Euclidean distance between 
+    the progenitor and its leading and trailing stripped components, added in quadrature.
+    """
+    ts = jnp.linspace(0,-t_age,2_000)
+    l_back = pot.integrate_orbit(w0=first_stripped_lead, t0=0, t1=-t_age, ts=ts)
+    t_back = pot.integrate_orbit(w0=first_stripped_trail, t0=0, t1=-t_age, ts=ts)
+    prog_back = pot.integrate_orbit(w0=prog_today,t0=0, t1=-t_age, ts=ts)
+    diff = jnp.sqrt(jnp.sum( (l_back.ys[:,:3] - prog_back.ys[:,:3])**2 + (t_back.ys[:,:3] - prog_back.ys[:,:3])**2, axis=1 ) )
+    
+    
+    diff_flip = jnp.flip(diff)
+    ts_flip = jnp.flip(l_back.ts)
+
+    amplitude_osc = diff_flip / diff_flip[-1]
+
+    length_func = length_today * amplitude_osc
+    
+    return dict(ts=ts_flip, length_func=length_func)
+
+@partial(jax.jit,static_argnames=["num_samples"])
+def sample_from_1D_pdf(x: jnp.array, y: jnp.array, key: jax.random.PRNGKey, num_samples: int):
+    """
+    Sample random values from a 1D probability distribution using the inverse CDF method.
+
+    Parameters
+    ----------
+    x : jax.Array
+        1D array of shape (n,) representing the x-axis values. Must be sorted in ascending order.
+    y : jax.Array
+        1D array of shape (n,) representing the function values at each `x`. Values should be non-negative.
+    key : jax.random.PRNGKey
+        JAX PRNG key used for random number generation.
+    num_samples : int
+        Number of random samples to generate.
+
+    Returns
+    -------
+    jax.Array
+        1D array of shape (num_samples,) containing values sampled from the probability distribution
+        defined by `x` and `y`.
+
+    Notes
+    -----
+    - The input `y` is automatically normalized to form a valid probability density function (PDF).
+    - The cumulative distribution function (CDF) is computed numerically, and its inverse is
+      approximated using linear interpolation.
+    - `x` should densely cover the domain of the distribution for accurate sampling.
+    """
+    # Step 1: Normalize y to make it a PDF
+    pdf = y / jnp.trapezoid(y, x)
+
+    # Step 2: Compute the CDF
+    cdf = jnp.cumsum(pdf)
+    cdf = cdf / cdf[-1]  # Normalize to 1
+
+    # Step 3: Create inverse CDF by interpolation
+    def inverse_cdf(u):
+        return jnp.interp(u, cdf, x)
+    
+    # Step 4: Sample uniform values and map through inverse CDF
+    u = jax.random.uniform(key, shape=(num_samples,))
+    samples = inverse_cdf(u)
+    return samples
+
 
 @partial(jax.jit,static_argnums=(0,))
 def release_model_Chen25(   pot_base: callable,

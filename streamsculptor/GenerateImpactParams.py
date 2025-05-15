@@ -4,7 +4,7 @@ from functools import partial
 from astropy import units as u
 import equinox as eqx
 import diffrax
-from streamsculptor import compute_stream_length
+from streamsculptor import compute_stream_length, compute_length_oscillations, sample_from_1D_pdf
 
 class ImpactGenerator:
     """
@@ -16,9 +16,10 @@ class ImpactGenerator:
                  stream: jnp.ndarray,
                  stream_phi1: jnp.array,
                  stripping_times: jnp.array,
+                 prog_today: jnp.array,
                  phi1window  = 0.1,
                  NumImpacts = 1,
-                 tImpactBounds = [-4000.0, 0.0],
+                 tImpactBounds = None,
                  bImpact_bounds = [0,1.0],
                  sigma = (180*u.km/u.s).to(u.kpc/u.Myr).value,
                  phi1_bounds = None,
@@ -32,15 +33,20 @@ class ImpactGenerator:
         self.stripping_times = stripping_times
         self.phi1window = phi1window
         self.NumImpacts = NumImpacts
+        self.prog_today = prog_today
         self.tobs = tobs
         self.stream_length = stream_length
         self.bImpact_bounds = bImpact_bounds
-        self.tImpactBounds = tImpactBounds
+        #self.tImpactBounds = tImpactBounds
         self.sigma = sigma
         self.seednum = seednum
         self.phi1_exclude = phi1_exclude
         self.keys = jax.random.split(jax.random.PRNGKey(seednum), 7)
 
+        if tImpactBounds is None:
+            self.tImpactBounds = [jnp.min(stripping_times), 0.0]
+        else:
+            self.tImpactBounds = tImpactBounds
         
         if phi1_bounds is None:
             self.phi1_bounds = [jnp.min(stream_phi1), jnp.max(stream_phi1)]
@@ -57,9 +63,21 @@ class ImpactGenerator:
 
         if self.stream_length is None:
             length = compute_stream_length(stream=self.stream, phi1=self.stream_phi1)
-            self.growth_rate = length / jnp.max(jnp.abs(jnp.array(self.tImpactBounds)))  # length / time
-        else:
-            self.growth_rate = self.stream_length / jnp.max(jnp.abs(jnp.array(self.tImpactBounds)))  
+    
+
+            #self.growth_rate = length / jnp.max(jnp.abs(jnp.array(self.tImpactBounds)))  # length / time
+        #else:
+            #self.growth_rate = self.stream_length / jnp.max(jnp.abs(jnp.array(self.tImpactBounds))) 
+        first_strip_inds = jnp.where(self.stripping_times == self.stripping_times.min())[0]
+        lead_first = self.stream.at[first_strip_inds.at[0].get()].get()
+        trail_first = self.stream.at[first_strip_inds.at[1].get()].get()
+        self.length_osc = compute_length_oscillations(pot=self.pot, 
+                                                        prog_today=self.prog_today,
+                                                        first_stripped_lead=lead_first,
+                                                        first_stripped_trail=trail_first,
+                                                        t_age=jnp.abs(jnp.asarray(self.tImpactBounds).min()),
+                                                        length_today=length) 
+
 
 
     @partial(jax.jit, static_argnums=(0,))
@@ -97,11 +115,11 @@ class ImpactGenerator:
         
         bImpact = jax.random.uniform(minval=self.b_low,maxval=self.b_high,key=keys[0],shape=(self.NumImpacts,))
     
-        t_sample = jnp.linspace(self.tImpactBounds[0], self.tImpactBounds[1], 10_000)
-        prob_timpact = self.growth_rate*(t_sample + jnp.abs(self.tImpactBounds[0]))
-        prob_timpact = prob_timpact / jnp.sum(prob_timpact)
-        tImpact = jax.random.choice(key=keys[1], a=t_sample, shape=(self.NumImpacts,), p=prob_timpact, replace=True)
-        
+        #t_sample = jnp.linspace(self.tImpactBounds[0], self.tImpactBounds[1], 10_000)
+        #prob_timpact = self.growth_rate*(t_sample + jnp.abs(self.tImpactBounds[0]))
+        #prob_timpact = prob_timpact / jnp.sum(prob_timpact)
+        #tImpact = jax.random.choice(key=keys[1], a=t_sample, shape=(self.NumImpacts,), p=prob_timpact, replace=True)
+        tImpact = sample_from_1D_pdf(x=self.length_osc['ts'], y=self.length_osc['length_func'], key=keys[1], num_samples=self.NumImpacts)
         def phi1_exclude_provided(phi1_exclude):
             seg1 = jnp.linspace(self.phi1_bounds[0], phi1_exclude[0], 1000)
             seg2 = jnp.linspace(phi1_exclude[1], self.phi1_bounds[1], 1000)

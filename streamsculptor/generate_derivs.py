@@ -43,6 +43,7 @@ def get_derivs(
                 bmax_fac = 10.,
                 phi1window = 0.5,
                 N_arm = 5_000,
+                save_iter_start = 0,
                 ):
 
     """
@@ -76,6 +77,8 @@ def get_derivs(
         Total number of subhalos to simulate impacts with.
     phi1_function : callable
         Function that maps a stream (N x 6 array) to phi1 values (length N).
+    pot : callable
+        Potential object used for the base stream model. Must be compatible with streamsculptor.
     path : str
         Directory path where output `.npy` files are saved.
     N_batch : int, optional
@@ -90,6 +93,8 @@ def get_derivs(
         Angular window (in phi1) around subhalos for considering impacts (default is 0.5).
     N_arm : int, optional
         Number of time samples for stream arm generation (default is 5000).
+    save_iter_start : int, optional
+        Starting index for saving output files (default is 0).
 
     Returns
     -------
@@ -196,7 +201,17 @@ def get_derivs(
         dict_save = dict(pert_out=pert_out,
                         r_s_root = sub_pot.r_s,
                         ImpactFrameParams=ImpactDict['ImpactFrameParams'])
-        jnp.save(path + '/' + str(i),dict_save)
+        jnp.save(path + '/' + str(i + save_iter_start),dict_save)
+
+        # Clean up
+        del(mass_samps)
+        del(rs_samps)
+        del(ImpactGen)
+        del(ImpactDict)
+        del(sub_pot)
+        del(pertgen)
+        del(pert_out)
+        del(dict_save)
     
     return None
 

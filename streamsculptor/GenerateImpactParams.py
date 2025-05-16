@@ -71,8 +71,8 @@ class ImpactGenerator:
             #self.growth_rate = self.stream_length / jnp.max(jnp.abs(jnp.array(self.tImpactBounds))) 
         ind_break = len(stripping_times) // 2 
         first_strip_inds = [0,ind_break]#jnp.where(self.stripping_times == self.stripping_times.min())[0]
-        lead_first = self.stream.at[first_strip_inds.at[0].get()].get()
-        trail_first = self.stream.at[first_strip_inds.at[1].get()].get()
+        lead_first = self.stream.at[first_strip_inds[0]].get()
+        trail_first = self.stream.at[first_strip_inds[1]].get()
         self.length_osc = compute_length_oscillations(pot=self.pot, 
                                                         prog_today=self.prog_today,
                                                         first_stripped_lead=lead_first,

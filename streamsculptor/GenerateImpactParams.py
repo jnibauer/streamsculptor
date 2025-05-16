@@ -64,7 +64,8 @@ class ImpactGenerator:
         if self.stream_length is None:
             length = compute_stream_length(stream=self.stream, phi1=self.stream_phi1)
     
-
+        else:
+            length = self.stream_length
             #self.growth_rate = length / jnp.max(jnp.abs(jnp.array(self.tImpactBounds)))  # length / time
         #else:
             #self.growth_rate = self.stream_length / jnp.max(jnp.abs(jnp.array(self.tImpactBounds))) 

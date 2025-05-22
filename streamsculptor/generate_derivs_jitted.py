@@ -49,7 +49,8 @@ def get_derivs_jitted(
 
     """
     Generate perturbation derivatives to a stellar stream using subhalo encounters and save the results to disk.
-
+    Note that the body function of the loop is jitted for performance / memory efficiency.
+    
     Parameters
     ----------
     prog_wtoday : jnp.array

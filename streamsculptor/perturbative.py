@@ -695,6 +695,7 @@ class GenerateMassRadiusPerturbation_Chen25(Potential):
         self.gradientPotentialPerturbation_per_SH = jax.jit(jax.jacfwd(potential_perturbation.potential_per_SH))
         self.gradientPotentialStructural_per_SH = jax.jit(jax.jacfwd(self.potential_structural.potential_per_SH))
         
+    
         
         self.base_stream = BaseStreamModel.BaseModel #Assuming Chen25 Base stream model
         self.num_pert = self.potential_perturbation.subhalo_x0.shape[0]
@@ -710,7 +711,8 @@ class GenerateMassRadiusPerturbation_Chen25(Potential):
         self.prog_fieldICs = jnp.flipud(prog_fieldICs.ys[1])
         self.perturbation_ICs = jnp.zeros(( len(flipped_times), self.num_pert, 12 )) #TODO: implementat self-consistent backwards integration of prog. at linear order in mass 
         self.base_realspace_ICs = self.base_stream.streamICs # N_star x 6
-            
+        
+        self.second_order_pert_ICs = [ self.perturbation_ICs, jnp.zeros((len(flipped_times), self.num_pert, 6)) ] # N_star x N_sh x 12, N_star x N_sh x 6
         
     #@eqx.filter_jit
     @partial(jax.jit,static_argnums=(0,1,))
@@ -751,6 +753,23 @@ class GenerateMassRadiusPerturbation_Chen25(Potential):
             return space_and_derivs
         
         return jax.lax.cond(cpu, cpu_func, gpu_func)
+
+    @partial(jax.jit,static_argnames=('self','cpu','solver','rtol','atol','dtmin','dtmax','max_steps'))
+    def compute_perturbation_second_order_OTF(self, cpu=True, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-6, atol=1e-6, dtmin=0.05, max_steps=10_000, dtmax=None):
+        integrator = lambda w0, ts: integrate_field(w0=w0,ts=ts,field=fields.MassRadiusPerturbation_OTF_SecondOrder(self),jump_ts=self.jump_ts, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax, max_steps=max_steps)
+        integrator = jax.jit(integrator)
+      
+        def gpu_func():
+            def single_particle_integrate(idx):
+                ts_arr = jnp.array([self.base_stream.ts[idx], self.base_stream.ts[-1]])
+                space_and_derivs = integrator([self.base_realspace_ICs.at[idx].get(), self.second_order_pert_ICs[0].at[idx].get(), self.second_order_pert_ICs[1].at[idx].get()],ts_arr)
+                space_and_derivs = [space_and_derivs.ys[0][-1,:], space_and_derivs.ys[1][-1,:], space_and_derivs.ys[2][-1,:]]
+                return space_and_derivs
+            particle_ids = self.base_stream.IDs[:-1]
+            space_and_derivs = jax.vmap(single_particle_integrate)(particle_ids)
+            return space_and_derivs
+        
+        return gpu_func()
 
     @partial(jax.jit, static_argnames=('self','pot_pert','solver', 'max_steps','rtol','atol'))
     def run_nonlinear_sim(self,

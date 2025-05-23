@@ -95,7 +95,7 @@ class Isochrone(Potential):
         return - self._G * self.m / (self.a + jnp.sqrt(r**2 + self.a**2))
     
 class PlummerPotential(Potential):
-    def __init__(self, m, r_s, units=None):
+    def __init__(self, m, r_s, units=None
         super().__init__(units, {'m': m, 'r_s': r_s})
     @partial(jax.jit,static_argnums=(0,))
     def potential(self,xyz,t):
@@ -107,7 +107,7 @@ class HernquistPotential(Potential):
         super().__init__(units, {'m': m, 'r_s': r_s, 'soft': soft})
     @partial(jax.jit,static_argnums=(0,))
     def potential(self,xyz,t):
-        r = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 + soft) # 0.00005
+        r = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 + self.soft) # 0.00005
         return -self._G*self.m / (r + self.r_s) 
 
 class ProgenitorPotential(Potential):

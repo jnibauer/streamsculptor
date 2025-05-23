@@ -95,7 +95,7 @@ class Isochrone(Potential):
         return - self._G * self.m / (self.a + jnp.sqrt(r**2 + self.a**2))
     
 class PlummerPotential(Potential):
-    def __init__(self, m, r_s, units=None
+    def __init__(self, m, r_s, units=None):
         super().__init__(units, {'m': m, 'r_s': r_s})
     @partial(jax.jit,static_argnums=(0,))
     def potential(self,xyz,t):

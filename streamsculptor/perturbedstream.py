@@ -48,7 +48,13 @@ def gen_perturbed_stream(BaseStreamModel: object,
     pot_base = BaseStreamModel.pot_base
     Msat = BaseStreamModel.Msat
        
-    sample_dict = RateCalculator.sample_masses(log10M_min=log10M_min,log10M_max=log10M_max,key=key, M_hm=M_hm, normalization=normalization,slope=slope, array_length=Max_Num_Impacts)
+    sample_dict = RateCalculator.sample_masses(log10M_min=log10M_min,
+                                               log10M_max=log10M_max,
+                                               key=key, 
+                                               M_hm=M_hm, 
+                                               normalization=normalization,
+                                               slope=slope, 
+                                               array_length=Max_Num_Impacts)
 
 
     mass_vals = (10**sample_dict['log10_mass'])*mass_fac
@@ -62,9 +68,12 @@ def gen_perturbed_stream(BaseStreamModel: object,
     key1, key2 = jax.random.split(key, 2)
     seednum = jax.random.randint(key=key1,shape=(1,),minval=0,maxval=10_000)[0]
     tstrip_stack = jnp.hstack([ts[:-1],ts[:-1]])
+
+    
     ImpactGen = ImpactGenerator(pot=pot_base, 
                                 tobs=ts.max(), 
                                 stream=unperturbed_stream, 
+                                prog_today = prog_wtoday,
                                 stream_phi1=phi1_unperturbed, 
                                 phi1_bounds=phi1_bounds,
                                 tImpactBounds=tImpactBounds,
@@ -90,7 +99,7 @@ def gen_perturbed_stream(BaseStreamModel: object,
                         subhalo_x0=out['cartImpact'][:,:3], 
                         subhalo_v=out['cartImpact'][:,3:],
                         subhalo_t0=out['tImpact'], 
-                        t_window=100.0,
+                        t_window=150.0,
                         units=pot_base.units)
     
     l_pert, t_pert = ssc.gen_stream_vmapped_with_pert_Chen25_fixed_prog(  

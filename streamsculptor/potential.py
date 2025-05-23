@@ -103,11 +103,11 @@ class PlummerPotential(Potential):
         return -self._G*self.m / jnp.sqrt(r_squared + self.r_s**2)
 
 class HernquistPotential(Potential):
-    def __init__(self, m, r_s, units=None):
-        super().__init__(units, {'m': m, 'r_s': r_s})
+    def __init__(self, m, r_s, soft = 0.0,units=None):
+        super().__init__(units, {'m': m, 'r_s': r_s, 'soft': soft})
     @partial(jax.jit,static_argnums=(0,))
     def potential(self,xyz,t):
-        r = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 + 0.00005)
+        r = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 + soft) # 0.00005
         return -self._G*self.m / (r + self.r_s) 
 
 class ProgenitorPotential(Potential):

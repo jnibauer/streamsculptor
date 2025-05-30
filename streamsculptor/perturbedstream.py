@@ -47,6 +47,8 @@ def gen_perturbed_stream(BaseStreamModel: object,
     prog_pot = BaseStreamModel.prog_pot
     pot_base = BaseStreamModel.pot_base
     Msat = BaseStreamModel.Msat
+
+    prog_wtoday = pot_base.integrate_orbit(w0=prog_w0, t0=ts.min(), t1=ts.max(),ts=jnp.array([ts.max()])).ys[0]
        
     sample_dict = RateCalculator.sample_masses(log10M_min=log10M_min,
                                                log10M_max=log10M_max,

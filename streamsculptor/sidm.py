@@ -70,6 +70,13 @@ class SIDMPotential(Potential):
         rho0 = (M/(4*jnp.pi*r_s**3))*fac
         return rho0
 
+    @partial(jax.jit, static_argnums=(0,))
+    def rho_s_SIDM(self, t, r_s_cdm, rho_s_cdm, tf):
+        """Calculate the SIDM scale density."""
+        t_tilde_value = self.t_tilde(t, tf, rho_s_cdm, r_s_cdm)
+        rho_s_sidm_value = 2.033 + 0.7381 * t_tilde_value + 7.264 * t_tilde_value**5 - 12.73 * t_tilde_value**7 + 9.915 * t_tilde_value**9 + (1-2.033)*(jnp.log(t_tilde_value + 0.001)/jnp.log(0.001))
+        return rho_s_sidm_value * rho_s_cdm
+
     @partial(jax.jit,static_argnums=(0,))
     def potential(self,xyz, t):
         raise NotImplementedError
@@ -81,8 +88,10 @@ class SIDMPotential(Potential):
         rho_s_cdm = self.get_nfw_rho0(self.M_cdm, self.r_s_cdm)
         r_s = self.r_s_sidm(t, self.r_s_cdm, rho_s_cdm, self.tf)
         r_c = self.r_c_sidm(t, self.r_s_cdm, rho_s_cdm, self.tf)
+        rho_s = self.rho_s_SIDM(t, self.r_s_cdm, rho_s_cdm, self.tf)
+        
         shape = self.interp(r_c, r_s, r)
-        M_enc = rho_s_cdm * shape
+        M_enc = rho_s * shape
         return self._G * M_enc / r**2
 
     eqx.filter_jit

@@ -29,18 +29,3 @@ def icrs_to_gd1(ra_rad, dec_rad):
     
     return phi1, phi2
 
-@jax.jit
-def get_phi12_from_stream(stream, name: str):
-    """
-    Differentiable helper function that takes us from simulated stream --> phi1, phi2
-    name: [gd1, pal5]
-    """
-    if name == 'gd1':
-        transf_func = icrs_to_gd1
-    
-    if name == 'pal5':
-
-       
-    ra_s, dec_s, dist_ = jax.vmap(jc.simcart_to_icrs)(stream[:,:3])
-    phi1_model, phi2_model = transf_func(ra_s*jnp.pi/180, dec_s*jnp.pi/180)
-    return phi1_model, phi2_model

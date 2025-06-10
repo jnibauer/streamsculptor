@@ -81,7 +81,8 @@ class SIDMPotential(Potential):
     def potential(self,xyz, t):
         raise NotImplementedError
     
-    eqx.filter_jit
+    #eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def gradient(self, xyz, t):
         """Calculate the SIDM acceleration."""
         r = jnp.sqrt(jnp.sum(xyz**2))
@@ -94,7 +95,8 @@ class SIDMPotential(Potential):
         M_enc = rho_s * shape
         return self._G * M_enc / r**2
 
-    eqx.filter_jit
+    #eqx.filter_jit
+    @partial(jax.jit, static_argnums=(0,))
     def acceleration(self,xyz,t):
         return -self.gradient(xyz, t)
 
@@ -109,9 +111,11 @@ class SIDMLinePotential(Potential):
                                  'subhalo_v': subhalo_v, 
                                  'subhalo_t0': subhalo_t0, 
                                  't_window': t_window})
+        data_path = os.path.join(os.path.dirname(__file__), 'data/sidm', 'sidm_interpolant_Menc.npy')
+        self.interp = jnp.load(data_path, allow_pickle=True).item()
     @partial(jax.jit,static_argnums=(0,))
     def single_subhalo_acceleration(self, xyz, M_cdm, r_s_cdm, tf, t):
-        return SIDMPotential(M_cdm=M_cdm, r_s_cdm = r_s_cdm, tf=tf,units=self.units).acceleration(xyz,t)
+        return SIDMPotential(M_cdm=M_cdm, r_s_cdm = r_s_cdm, tf=tf, interp=self.interp, units=self.units).acceleration(xyz,t)
         
     @partial(jax.jit, static_argnums=(0,))
     def acceleration_per_SH(self, xyz, t):

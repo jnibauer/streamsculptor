@@ -7,6 +7,7 @@ setup(
         'streamsculptor': [
             'data/LMC_MW_potential/*',  
             'data/GD1_prog/*',
+            'data/sidm/*',
             'examples/*',  
         ],
     },

@@ -10,7 +10,6 @@ import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 
 import jax.random as random 
-from jax_cosmo.scipy.interpolate import InterpolatedUnivariateSpline
 from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTerminatingEvent, DirectAdjoint, RecursiveCheckpointAdjoint, ConstantStepSize, Euler, StepTo
 import diffrax
 import equinox as eqx
@@ -26,6 +25,9 @@ class SIDMPotential(Potential):
     def __init__(self, M_cdm, r_s_cdm, tf, interp=None, units=None):
         """
         Initializes a SIDM potential with an interpolated function.
+        Subhalo profile from Shin’ichiro Ando et al. 2025.
+        https://iopscience.iop.org/article/10.1088/1475-7516/2025/02/053
+        Includes a time evolving scale radius and core radius, cosmologically motivated.
         """
         super().__init__(units, {'M_cdm': M_cdm, 'r_s_cdm': r_s_cdm, 'tf': tf})
         if interp is None:
@@ -86,3 +88,46 @@ class SIDMPotential(Potential):
     eqx.filter_jit
     def acceleration(self,xyz,t):
         return -self.gradient(xyz, t)
+
+
+
+class SIDMLinePotential(Potential):
+    def __init__(self, M_cdm, r_s_cdm, tf, subhalo_x0, subhalo_v, subhalo_t0, t_window, units=None):
+        super().__init__(units, {'M_cdm': M_cdm, 
+                                 'r_s_cdm': r_s_cdm, 
+                                 'tf': tf, 
+                                 'subhalo_x0': subhalo_x0, 
+                                 'subhalo_v': subhalo_v, 
+                                 'subhalo_t0': subhalo_t0, 
+                                 't_window': t_window})
+    @partial(jax.jit,static_argnums=(0,))
+    def single_subhalo_acceleration(self, xyz, M_cdm, r_s_cdm, tf, t):
+        return SIDMPotential(M_cdm=M_cdm, r_s_cdm = r_s_cdm, tf=tf,units=self.units).acceleration(xyz,t)
+        
+    @partial(jax.jit, static_argnums=(0,))
+    def acceleration_per_SH(self, xyz, t):
+
+
+        def true_func(subhalo_x0, subhalo_v, subhalo_t0, M_cdm, r_s_cdm, tf, t):
+            relative_position = xyz - (subhalo_x0 + subhalo_v*(t - subhalo_t0))
+            acceleration_vals = self.single_subhalo_acceleration(relative_position, M_cdm, r_s_cdm, tf, t) 
+            r_hat = relative_position / jnp.linalg.norm(relative_position)
+            return acceleration_vals * r_hat
+        
+        def false_func(subhalo_x0, subhalo_v, subhalo_t0, M_cdm, r_s_cdm, tf, t):
+            return jnp.zeros(3)
+
+        pred1 = jnp.abs(t - self.subhalo_t0) < self.t_window # True if in window, false otherwise
+        pred2 = t >= self.tf # True if after tf, false otherwise
+        pred = pred1 & pred2
+        vmapped_cond = jax.vmap(jax.lax.cond,in_axes=((0,None,None,0,0,0,0,0,0,None)))
+        acc_per_subhalo = vmapped_cond(pred,true_func,false_func, self.subhalo_x0, self.subhalo_v, self.subhalo_t0, self.M_cdm, self.r_s_cdm, self.tf, t) 
+        return acc_per_subhalo
+
+
+    @partial(jax.jit, static_argnums=(0,))
+    def acceleration(self, xyz, t):
+        """
+        Calculate the total acceleration from all subhalos.
+        """
+        return jnp.sum(self.acceleration_per_SH(xyz, t), axis=0)

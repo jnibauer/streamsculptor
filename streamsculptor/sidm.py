@@ -123,7 +123,13 @@ class SIDMLinePotential(Potential):
         vmapped_cond = jax.vmap(jax.lax.cond,in_axes=((0,None,None,0,0,0,0,0,0,None)))
         acc_per_subhalo = vmapped_cond(pred,true_func,false_func, self.subhalo_x0, self.subhalo_v, self.subhalo_t0, self.M_cdm, self.r_s_cdm, self.tf, t) 
         return acc_per_subhalo
-
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def gradient(self, xyz, t):
+        """
+        Calculate the total gradient from all subhalos.
+        """
+        return -jnp.sum(self.acceleration_per_SH(xyz, t), axis=0)
 
     @partial(jax.jit, static_argnums=(0,))
     def acceleration(self, xyz, t):

@@ -31,10 +31,20 @@ class SIDMPotential(Potential):
         """
         super().__init__(units, {'M_cdm': M_cdm, 'r_s_cdm': r_s_cdm, 'tf': tf})
         if interp is None:
-            data_path = os.path.join(os.path.dirname(__file__), 'data/sidm', 'sidm_interpolant_Menc.npy')
+            ###data_path = os.path.join(os.path.dirname(__file__), 'data/sidm', 'sidm_interpolant_Menc.npy')
+            data_path = os.path.join(os.path.dirname(__file__), 'data/sidm', 'jax_interp.npy')
+            ###interp = jnp.load(data_path, allow_pickle=True).item()
             interp = jnp.load(data_path, allow_pickle=True).item()
         self.interp = interp
-        
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def interp_func(self, r_c, r_s, r):
+        """
+        Interpolates the enclosed mass using the provided interpolant.
+        """
+        xx = jnp.array([r_c, r_s, r])
+        return self.interp(xx)
+
     @partial(jax.jit, static_argnums=(0,))
     def t_c(self, t, rho_s_cdm, r_s_cdm):
         sig_eff_over_m_chi = (147.1) * (u.cm**2 / u.g).to(u.kpc**2 / u.Msun)
@@ -91,7 +101,7 @@ class SIDMPotential(Potential):
         r_c = self.r_c_sidm(t, self.r_s_cdm, rho_s_cdm, self.tf)
         rho_s = self.rho_s_SIDM(t, self.r_s_cdm, rho_s_cdm, self.tf)
         
-        shape = self.interp(r_c, r_s, r)
+        shape = self.interp_func(r_c,r_s,r)#self.interp(r_c, r_s, r)
         M_enc = rho_s * shape
         return self._G * M_enc / r**2
 
@@ -111,7 +121,9 @@ class SIDMLinePotential(Potential):
                                  'subhalo_v': subhalo_v, 
                                  'subhalo_t0': subhalo_t0, 
                                  't_window': t_window})
-        data_path = os.path.join(os.path.dirname(__file__), 'data/sidm', 'sidm_interpolant_Menc.npy')
+        ####data_path = os.path.join(os.path.dirname(__file__), 'data/sidm', 'sidm_interpolant_Menc.npy')
+        ####self.interp = jnp.load(data_path, allow_pickle=True).item()
+        data_path = os.path.join(os.path.dirname(__file__), 'data/sidm', 'jax_interp.npy')
         self.interp = jnp.load(data_path, allow_pickle=True).item()
     @partial(jax.jit,static_argnums=(0,))
     def single_subhalo_acceleration(self, xyz, M_cdm, r_s_cdm, tf, t):

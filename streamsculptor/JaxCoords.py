@@ -175,3 +175,26 @@ def simvel_to_ICRS(sim_q, sim_qdot):
     return pm_ra_cosdec, pm_dec, rv
     
     
+@jax.jit
+def simvel_to_ICRS_GSR(sim_q, sim_qdot):
+    """
+    Same as sinvel_to_ICRS, but outputs velocity in the
+    galactic standard of rest (GSR) frame. That is, the Sun's
+    reflex motion is not included in the velocity.
+    """
+    rad_Myr_to_mas_yr = 206.26480624709637
+    Sun_reflex = jnp.array([0.01319299, 0.25117811, 0.0079567 ])
+    alpha, delta, dist = simcart_to_icrs(sim_q)
+    deriv = jax.jacfwd(alpha_delta_to_simcart)(jnp.deg2rad(jnp.array([alpha,delta,dist])))
+
+    alpha_hat = deriv[:,0]/jnp.linalg.norm(deriv[:,0])
+    dec_hat = deriv[:,1]/jnp.linalg.norm(deriv[:,1])
+    d_hat = deriv[:,2]/jnp.linalg.norm(deriv[:,2])
+
+    reflex_added = sim_qdot
+    pm_ra_cosdec = jnp.sum((reflex_added*alpha_hat/dist))*rad_Myr_to_mas_yr
+    pm_dec = jnp.sum((reflex_added*dec_hat/dist))*rad_Myr_to_mas_yr
+    rv = jnp.sum(reflex_added*d_hat)
+
+    return pm_ra_cosdec, pm_dec, rv
+

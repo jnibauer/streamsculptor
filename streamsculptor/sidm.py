@@ -90,6 +90,27 @@ class SIDMPotential(Potential):
     @partial(jax.jit,static_argnums=(0,))
     def potential(self,xyz, t):
         raise NotImplementedError
+
+    @partial(jax.jit, static_argnums=(0,))
+    def density(self, xyz, t):
+        """
+           Calculate the SIDM density.
+           Equation 2.11 of https://arxiv.org/pdf/2403.16633
+        """
+        rho_s_cdm = self.get_nfw_rho0(self.M_cdm, self.r_s_cdm)
+        r_s = self.r_s_sidm(t, self.r_s_cdm, rho_s_cdm, self.tf)
+        r_c = self.r_c_sidm(t, self.r_s_cdm, rho_s_cdm, self.tf)
+        rho_s = self.rho_s_SIDM(t, self.r_s_cdm, rho_s_cdm, self.tf)
+
+        r = jnp.sqrt(jnp.sum(xyz**2))
+        beta = 4.0
+
+        denom_bracket1 = ( (r**beta + r_c**2)**(1/beta) ) / r_s
+        denom_bracket2 = ((r/r_s)  + 1)**2
+
+        denom = denom_bracket1 * denom_bracket2
+
+        return rho_s / denom
     
     #eqx.filter_jit
     @partial(jax.jit, static_argnums=(0,))

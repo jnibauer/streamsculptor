@@ -193,6 +193,65 @@ class DehnenBarPotential(Potential):
         pot_eval = prefacs*((R**2/r**2))*U_eval*jnp.cos(2*(phi - self.phib - self.Omega*t))
         return pot_eval
 
+
+class MN3ExponentialDiskPotential(Potential):
+    # K matrices copied from gala
+    _K_pos_dens = jnp.array([
+        [0.0036, -0.0330, 0.1117, -0.1335, 0.1749],
+        [-0.0131, 0.1090, -0.3035, 0.2921, -5.7976],
+        [-0.0048, 0.0454, -0.1425, 0.1012, 6.7120],
+        [-0.0158, 0.0993, -0.2070, -0.7089, 0.6445],
+        [-0.0319, 0.1514, -0.1279, -0.9325, 2.6836],
+        [-0.0326, 0.1816, -0.2943, -0.6329, 2.3193],
+    ])
+    _K_neg_dens = jnp.array([
+        [-0.0090, 0.0640, -0.1653, 0.1164, 1.9487],
+        [0.0173, -0.0903, 0.0877, 0.2029, -1.3077],
+        [-0.0051, 0.0287, -0.0361, -0.0544, 0.2242],
+        [-0.0358, 0.2610, -0.6987, -0.1193, 2.0074],
+        [-0.0830, 0.4992, -0.7967, -1.2966, 4.4441],
+        [-0.0247, 0.1718, -0.4124, -0.5944, 0.7333],
+    ])
+
+    def __init__(self, m, h_R, h_z, units=None, positive_density=True, sech2_z=True):
+        # Store parameters
+        super().__init__(units, {'m': m, 'h_R': h_R, 'h_z': h_z})
+        self.m = m
+        self.h_R = h_R
+        self.h_z = h_z
+        self.positive_density = positive_density
+        self.sech2_z = sech2_z
+
+        # Select K matrix
+        K = self._K_pos_dens if positive_density else self._K_neg_dens
+        hzR = h_z / h_R
+
+        # Compute b/h_R
+        if sech2_z:
+            b_hR = -0.033 * hzR**3 + 0.262 * hzR**2 + 0.659 * hzR
+        else:
+            b_hR = -0.269 * hzR**3 + 1.08 * hzR**2 + 1.092 * hzR
+
+        # Setup x vector
+        x = jnp.array([b_hR**4, b_hR**3, b_hR**2, b_hR, 1.0])
+        param_vec = jnp.dot(K, x)
+
+        # Miyamoto-Nagai parameters
+        self._ms = param_vec[:3] * m
+        self._as = param_vec[3:] * h_R
+        self._b = b_hR * h_R
+
+    @partial(jax.jit, static_argnums=(0,))
+    def potential(self, xyz, t):
+        R2 = xyz[0]**2 + xyz[1]**2
+        z = xyz[2]
+        # Sum the three Miyamoto-Nagai disk potentials
+        pot = 0.0
+        for i in range(3):
+            pot += MiyamotoNagaiDisk(m=self._ms[i], a=self._as[i], b=self._b, units=self.units).potential(xyz, t)
+        
+        return pot
+
 class PowerLawCutoffPotential(Potential):
     """
     Galpy potential, following the implementation from gala

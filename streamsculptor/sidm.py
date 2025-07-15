@@ -36,6 +36,7 @@ class SIDMPotential(Potential):
             ###interp = jnp.load(data_path, allow_pickle=True).item()
             interp = jnp.load(data_path, allow_pickle=True).item()
         self.interp = interp
+        self.density = self.density_func
     
     @partial(jax.jit, static_argnums=(0,))
     def interp_func(self, r_c, r_s, r):
@@ -92,7 +93,7 @@ class SIDMPotential(Potential):
         raise NotImplementedError
 
     @partial(jax.jit, static_argnums=(0,))
-    def density(self, xyz, t):
+    def density_func(self, xyz, t):
         """
            Calculate the SIDM density.
            Equation 2.11 of https://arxiv.org/pdf/2403.16633
@@ -105,12 +106,15 @@ class SIDMPotential(Potential):
         r = jnp.sqrt(jnp.sum(xyz**2))
         beta = 4.0
 
-        denom_bracket1 = ( (r**beta + r_c**2)**(1/beta) ) / r_s
+        denom_bracket1 = ( (r**beta + r_c**beta)**(1/beta) ) / r_s
         denom_bracket2 = ((r/r_s)  + 1)**2
 
         denom = denom_bracket1 * denom_bracket2
 
         return rho_s / denom
+
+
+    
     
     #eqx.filter_jit
     @partial(jax.jit, static_argnums=(0,))

@@ -13,6 +13,7 @@ import jax.random as random
 from jax_cosmo.scipy.interpolate import InterpolatedUnivariateSpline
 from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTerminatingEvent, DirectAdjoint, RecursiveCheckpointAdjoint, ConstantStepSize, Euler, StepTo
 import diffrax
+import jax.scipy.special  as jsp
 import equinox as eqx
 from jax.scipy import special
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
@@ -21,6 +22,8 @@ from streamsculptor import Potential
 from .InterpAGAMA import AGAMA_Spheroid
 import interpax
 import os
+
+
 
 
 
@@ -251,6 +254,81 @@ class MN3ExponentialDiskPotential(Potential):
             pot += MiyamotoNagaiDisk(m=self._ms[i], a=self._as[i], b=self._b, units=self.units).potential(xyz, t)
         
         return pot
+
+class ZhaoPotential(Potential):
+    """
+    Zhao (1996) double power-law spherical potential.
+    Based off of the galax implementation. In a future release this function will
+    be deprecated, and galax potentials will be converted to streamsculptor.potential 
+    objects directly.
+
+
+    Parameters
+    ----------
+    m : float
+        Mass parameter.
+    r_s : float
+        Scale radius.
+    alpha : float
+        Transition width (alpha > 0).
+    beta : float
+        Outer slope (finite mass when beta > 3).
+    gamma : float
+        Inner slope (0 <= gamma < 3).
+    units: dict or None
+        Unit system.
+    """
+    def __init__(self, m, r_s, alpha, beta, gamma, units=None):
+        super().__init__(units, {'m': m, 'r_s': r_s, 'alpha': alpha, 'beta': beta, 'gamma': gamma})
+        self.gradient = self.gradient_func
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _rho0(self,m, alpha, beta, gamma):
+        denom = alpha * jsp.beta(alpha * (3.0 - gamma), alpha * (beta - 3.0))
+        return m / (4.0 * jnp.pi * denom)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _density(self,m, r_s, alpha, beta, gamma, r):
+        x = r / r_s
+        rho0 = self._rho0(m, alpha, beta, gamma)
+        b = (beta - gamma) * alpha
+        return (rho0 / (r_s ** 3)) / x**gamma / (1.0 + x ** (1.0 / alpha)) ** b
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _potential(self,m, r_s, alpha, beta, gamma, G, r):
+        x = r / r_s
+        z = x ** (1.0 / alpha) / (1.0 + x ** (1.0 / alpha))
+        rho0 = self._rho0(m, alpha, beta, gamma)
+        p0 = alpha * (2.0 - gamma)
+        q0 = alpha * (beta - 3.0)
+        c0 = alpha * (beta - gamma)
+        term_l = jsp.beta(c0 - q0, q0) * jsp.betainc(c0 - q0, q0, z)
+        eps = jnp.sqrt(jnp.finfo(r.dtype).eps)
+        p0_safe = jnp.where(p0 <= 0, eps, p0)
+        logB = jsp.betaln(p0_safe, c0 - p0)
+        log1mI = jnp.log1p(-jsp.betainc(p0_safe, c0 - p0, z))
+        term_r = jnp.exp(logB + log1mI)
+        return -4.0 * jnp.pi * G * rho0 * alpha * (term_l / r + term_r / r_s)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def potential(self, xyz, t):
+        r = jnp.sqrt(jnp.sum(xyz**2))
+        return self._potential(self.m, self.r_s, self.alpha, self.beta, self.gamma, self._G, r)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def density(self, xyz, t):
+        r = jnp.sqrt(jnp.sum(xyz**2))
+        return self._density(self.m, self.r_s, self.alpha, self.beta, self.gamma, r)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def gradient_func(self, xyz, t):
+        r = jnp.sqrt(jnp.sum(xyz**2))
+        dr = 1e-5 * r + 1e-8
+        phi_r = self._potential(self.m, self.r_s, self.alpha, self.beta, self.gamma, self._G, r)
+        phi_r_dr = self._potential(self.m, self.r_s, self.alpha, self.beta, self.gamma, self._G, r + dr)
+        dphi_dr = (phi_r_dr - phi_r) / dr
+        grad = dphi_dr * xyz / r
+        return grad
 
 class PowerLawCutoffPotential(Potential):
     """

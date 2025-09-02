@@ -17,6 +17,7 @@ import jax.scipy.special  as jsp
 import equinox as eqx
 from jax.scipy import special
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
+from quadax import quadgk
 
 from streamsculptor import Potential
 from .InterpAGAMA import AGAMA_Spheroid
@@ -476,6 +477,57 @@ class UniformAcceleration(Potential):
     @partial(jax.jit,static_argnums=(0,))
     def acceleration(self,xyz,t):
         return -self.gradient(xyz, t)
+
+class get_potential_from_density(Potential):
+    """
+    Compute a 1D spherically-symmetric potential interpolated from density_func.
+    
+    Parameters
+    ----------
+    density_func : callable
+        Function taking radius r and returning density at r.
+    r_grid : array, optional
+        Grid of r values for tabulating/interpolating the potential (default: logspace).
+    units : dict, optional
+        If provided, should contain 'G'.
+
+    Returns
+    -------
+    potential_func : callable
+        Function taking radius r and returning interpolated potential at r.
+    """
+    def __init__(self, density_func, r_grid=None, units=None):
+        super().__init__(units, {'density_func': density_func, 'r_grid': r_grid})
+        if r_grid is None:
+            self.r_grid = jnp.logspace(-3, 3, 128)
+
+        self.phi_grid = jax.vmap(self.compute_potential)(self.r_grid)
+        #self.potential = self.get_potential_func()
+        #self.gradient = jax.jacfwd(self.potential,argnums=(0))
+        #self.acceleration = lambda xyz,t: -self.gradient(xyz,t)
+        self.density = lambda xyz,t: self.density_func(jnp.linalg.norm(xyz))
+        
+    @partial(jax.jit,static_argnums=(0,))
+    def compute_potential(self,r):
+        # Integrals for potential:
+        def inner_integrand(rp):
+            return self.density_func(rp) * rp**2
+
+        def outer_integrand(rp):
+            return self.density_func(rp) * rp
+        
+        inner = quadgk(fun=inner_integrand,interval=jnp.array([0,r]))[0]
+        outer = quadgk(fun=outer_integrand, interval=jnp.array([r,jnp.inf]))[0]
+        return -4 * jnp.pi * self._G * (inner / r + outer)
+    
+
+    @partial(jax.jit,static_argnums=(0,))
+    def potential(self,xyz, t):
+        # Interpolate in log-space for better accuracy at small/large r
+        func =  interpax.Interpolator1D(x=jnp.log(self.r_grid), f=self.phi_grid, method='cubic')
+        return func(jnp.log(jnp.linalg.norm(xyz)))
+       
+
 
 class MW_LMC_Potential(Potential):
     """

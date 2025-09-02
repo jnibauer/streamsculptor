@@ -21,6 +21,7 @@ Required installations:
 - Equinox (class structure)
 - Interpax (spline interpolation)
 - Gala (for unitsystem module)
+- quadax (Gaussian quadrature)
 
 Optional installations:
 - Jaxopt and Optax (for optimization of restricted N-body)

@@ -1,6 +1,6 @@
 ![streamsculptor](docs/streamsculptor_png.png) 
 
-StreamSculptor: perturbative and non-perturbative stream models implemented in Jax.
+`streamsculptor`: perturbative and non-perturbative stream models implemented in Jax.
 
 Supports CPU and GPU architectures, automatic differentiation, custom time-dependent potentials.
 

@@ -20,12 +20,20 @@ usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
 from quadax import quadgk
 
 from streamsculptor import Potential
-from .InterpAGAMA import AGAMA_Spheroid
+#from .InterpAGAMA import AGAMA_Spheroid
 import interpax
 import os
 
 
-
+def _require_agama():
+    try:
+        from .InterpAGAMA import AGAMA_Spheroid
+    except Exception as e:
+        raise ImportError(
+            "AGAMA-based spheroidal potential is optional and require the 'agama' extra.\n"
+            "Install with: 'streamsculptor[agama]'"
+        ) from e
+    return AGAMA_Spheroid
 
 
 class LMCPotential(Potential):
@@ -639,6 +647,9 @@ class AGAMA_MW_LMC_Potential(Potential):
     TODO: use higher-order splines.
     """
     def __init__(self, units=None):
+        # Local import so that simply importing potential.py does NOT require agama
+        AGAMA_Spheroid = _require_agama()
+
         super().__init__(units,{'params':None})
         # Load the data for MW and LMC motion
         data_path_MW = os.path.join(os.path.dirname(__file__), 'data/LMC_MW_potential', 'MW_motion_dict.npy')

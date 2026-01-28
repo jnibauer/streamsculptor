@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "streamsculptor"
+version = "0.0.0"
+description = "streamsculptor"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Jacob Nibauer" }]
+
+dependencies = [
+  "astropy>=6",
+  "diffrax>=0.6",
+  "equinox>=0.11",
+  "gala>=1.9",
+  "interpax>=0.3",
+  "jaxopt>=0.8",
+  "numpy>=1.26",
+  "optax>=0.2",
+  "quadax>=0.2",
+  "tqdm>=4.64",
+  "jax-cosmo>=0.1",
+]
+
+# Optional dependency groups users can install like: pip install "streamsculptor[agama]"
+[project.optional-dependencies]
+jax = ["jax>=0.4"]
+agama = ["agama>=1.0"]
+
+[tool.setuptools]
+packages = { find = {} }
+include-package-data = true
+
+[tool.setuptools.package-data]
+# Include non-.py files inside the installed package.
+streamsculptor = [
+  "data/LMC_MW_potential/*",
+  "data/GD1_prog/*",
+  "data/sidm/*",
+  "examples/*",
+]

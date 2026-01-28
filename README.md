@@ -6,9 +6,9 @@ Supports CPU and GPU architectures, automatic differentiation, custom time-depen
 
 Auxillary ODEs can be computed along trajectories using the fields module.
 
+**Example notebooks included in [streamsculptor/examples](https://github.com/jnibauer/streamsculptor/tree/main/streamsculptor/examples)**
 
-
-Based on Nibauer et al. 2025: https://arxiv.org/abs/2410.21174
+Based on Nibauer et al. 2025: https://arxiv.org/abs/2410.21174 (see below for bibtex)
 
 
 ### Installation

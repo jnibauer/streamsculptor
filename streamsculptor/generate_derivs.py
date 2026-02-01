@@ -8,8 +8,9 @@ import jax.numpy as jnp
 import jax
 jax.config.update("jax_enable_x64", True)
 
-from streamsculptor import potential
-from streamsculptor import JaxCoords as jc
+from . import potential
+from . import JaxCoords as jc
+
 import diffrax
 
 import streamsculptor as ssc
@@ -17,7 +18,7 @@ import streamsculptor as ssc
 import tqdm
 import numpy as np
 
-from streamsculptor import perturbative as pert
+from . import perturbative as pert
 from streamsculptor.GenerateImpactParams import ImpactGenerator
 
 

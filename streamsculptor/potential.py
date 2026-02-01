@@ -19,12 +19,11 @@ from jax.scipy import special
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
 from quadax import quadgk
 
-from streamsculptor import Potential
+from .main import Potential
+from .interpolation import *
 from .InterpAGAMA import AGAMA_Spheroid
 import interpax
 import os
-
-
 
 
 
@@ -738,8 +737,75 @@ class AGAMA_MW_LMC_Potential(Potential):
         raise NotImplementedError("Potential not implemented, force is non-conservative")
 
 
-    
+class Optimized_MW_LMC_Potential(Potential):
+    def __init__(self, units=None):
+        # We call the base Potential init, not the MW_LMC_Potential init
+        # to avoid creating the 6 slow interpolators
+        super().__init__(units,{'params':None})
 
+        # Load data once
+        data_path_MW = os.path.join(os.path.dirname(__file__), 'data/LMC_MW_potential', 'MW_motion_dict.npy')
+        data_path_LMC = os.path.join(os.path.dirname(__file__), 'data/LMC_MW_potential', 'LMC_motion_dict.npy')
+        MW_dict = jnp.load(data_path_MW, allow_pickle=True).item()
+        LMC_dict = jnp.load(data_path_LMC, allow_pickle=True).item()
+    
+        # CONSOLIDATE: Stack (LMC_x, LMC_y, LMC_z, MW_vx, MW_vy, MW_vz)
+        # Shape will be (N_samples, 6)
+        combined_f = jnp.stack([
+            LMC_dict['flip_trajLMC'][:,0], LMC_dict['flip_trajLMC'][:,1], LMC_dict['flip_trajLMC'][:,2],
+            MW_dict['flip_traj'][:,3], MW_dict['flip_traj'][:,4], MW_dict['flip_traj'][:,5]
+        ], axis=-1)
+
+        # Single Interpolator
+        self.motion_interp = UniformCubicInterpolator(LMC_dict['flip_tsave'], combined_f) # simple cubic spline
+        # self.motion_interp = UniformSplineC2Interpolator(LMC_dict['flip_tsave'], combined_f) # double differentiable spline
+
+        # Standard components
+        pot_bulge = HernquistPotential(m=5e9, r_s=1.0, units=units)
+        pot_disk = MiyamotoNagaiDisk(m=5.0e10, a=3.0, b=0.3, units=units)
+        pot_halo = NFWPotential(m=5.4e11, r_s=15.62, units=units)
+        self.pot_MW = Potential_Combine([pot_bulge, pot_disk, pot_halo], units=units)
+
+        massLMC = .85e11
+        radiusLMC = (massLMC/1e11)**0.6 * 8.5
+        self.pot_LMC = NFWPotential(m=massLMC, r_s=radiusLMC, units=units)
+
+        # Wrap them using the consolidated spline
+        self.translating_LMC_pot = TimeDepTranslatingPotential(
+            pot=self.pot_LMC, center_spl=self.get_LMC_pos, units=units
+        )
+        self.unif_acc = UniformAcceleration(
+            velocity_func=self.get_MW_vel, units=units
+        )
+        
+        self.total_pot = Potential_Combine([self.pot_MW, self.translating_LMC_pot, self.unif_acc], units=units)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def get_LMC_pos(self, t):
+        # Extract first 3 columns
+        return self.motion_interp(t)[:3]
+
+    @partial(jax.jit, static_argnums=(0,))
+    def get_MW_vel(self, t):
+        # Extract last 3 columns
+        return self.motion_interp(t)[3:]
+
+    @partial(jax.jit,static_argnums=(0,))
+    def gradient(self,xyz,t):
+        """
+        Gradient of the potential with respect to the position
+        """
+        return self.total_pot.gradient(xyz,t)
+
+    # Ensure the required methods point to the combined potential
+    @partial(jax.jit, static_argnums=(0,))
+    def acceleration(self, xyz, t):
+        return self.total_pot.acceleration(xyz, t)   
+    
+    @partial(jax.jit,static_argnums=(0,))
+    def potential(self, xyz, t):
+        # Raise error with message
+        raise NotImplementedError("Potential not implemented, force is non-conservative")
  
 class CustomPotential(Potential):
     """

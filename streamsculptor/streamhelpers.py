@@ -1,4 +1,4 @@
-from streamsculptor import potential
+from . import potential
 from functools import partial
 from astropy.constants import G
 import astropy.coordinates as coord
@@ -14,8 +14,7 @@ jax.config.update("jax_enable_x64", True)
 from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTerminatingEvent, DirectAdjoint, RecursiveCheckpointAdjoint, ConstantStepSize, Euler, StepTo
 import diffrax
 import equinox as eqx
-import interpax
-import streamsculptor as ssc
+from .interpolation import *
 
 
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
@@ -505,10 +504,11 @@ def gen_stream_vmapped_Chen25(  pot_base: callable,
     Generate stellar stream by vmapping over the release model/integration. Better for GPU usage.
     """
     stream_ics, orb_fwd = gen_stream_ics_Chen25(pot_base=pot_base, ts=ts, prog_w0=prog_w0, Msat=Msat, key=key, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax, max_steps=max_steps)
+
     pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = stream_ics
     
     # Interpolate progenitor forward. This is pointless when prog_pot is Null (m=0), but will not break anything. 
-    prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
+    prog_spline = UniformCubicInterpolator(orb_fwd.ts, orb_fwd.ys[:,:3])
     prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
     pot_tot = potential.Potential_Combine(potential_list=[pot_base, prog_pot_translating], units=usys)
     
@@ -553,7 +553,7 @@ def gen_stream_vmapped_with_pert_Chen25(pot_base=None,
     pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = stream_ics
     
     # Interpolate progenitor forward. This is pointless when prog_pot is Null (m=0), but will not break anything. 
-    prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
+    prog_spline = UniformCubicInterpolator(orb_fwd.ts, orb_fwd.ys[:,:3])
     prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
     pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_pert, prog_pot_translating], units=usys)
     # Integrate progenitor in full potential: base + prog + perturbation
@@ -600,7 +600,7 @@ def gen_stream_vmapped_with_pert_Chen25_fixed_prog(pot_base=None,
     pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = stream_ics
     
     # Interpolate progenitor forward. This is pointless when prog_pot is Null (m=0), but will not break anything. 
-    prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
+    prog_spline = UniformCubicInterpolator(orb_fwd.ts, orb_fwd.ys[:,:3])
     prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
     pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_pert, prog_pot_translating], units=usys)
     # Integrate progenitor in full potential: base + prog + perturbation

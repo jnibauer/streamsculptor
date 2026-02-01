@@ -18,7 +18,7 @@ import equinox as eqx
 import jaxopt
 import optax
 
-from streamsculptor import fields
+from . import fields
 from streamsculptor.fields import integrate_field
 
 class RestrictedNbody_generator:

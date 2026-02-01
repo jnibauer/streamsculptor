@@ -13,11 +13,12 @@ from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTe
 import diffrax
 import equinox as eqx
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
-from streamsculptor import Potential
+from .main import Potential
 # Necessary for the interpolation
 import agama
 import interpax
 import numpy as np
+from .interpolation import *
 
 # all agama dimensional quantities are given in the units of 1 kpc, 1 km/s, 1 Msun;
 agama.setUnits(length=1, velocity=1, mass=1)
@@ -50,6 +51,8 @@ class AGAMA_Spheroid(Potential):
         zeros = np.zeros_like(self.rgrid)[:,None]
         inp = np.hstack([self.rgrid[:, None], zeros, zeros])
         self.pot_target = self.pot_agama.potential(inp)*( (u.km/u.s)**2 ).to(u.kpc**2/u.Myr**2)
+        
+        # Switch to custom interpolator after sorting out unit issues
         self.spl_pot_func  = interpax.Interpolator1D(x=self.rgrid, f=jnp.array(self.pot_target),method='monotonic')
         self.density = lambda xyz, t: self.density_func(xyz, t, self.densityNorm)
 

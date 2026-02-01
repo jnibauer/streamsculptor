@@ -14,12 +14,12 @@ from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTe
 import diffrax
 import equinox as eqx
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
-from streamsculptor import fields
+from . import fields
 from streamsculptor.fields import integrate_field
-from streamsculptor import custom_release_model
-from streamsculptor import Potential
+from . import custom_release_model
+from .main import Potential
 import streamsculptor as ssc
-import interpax
+from .interpolation import *
 
 class GenerateMassRadiusPerturbation(Potential):
     """
@@ -639,7 +639,7 @@ class BaseStreamModelChen25(Potential):
         vel_rel = vel_rel.at[args].get()
 
         # Interpolate progenitor forward. This is pointless when prog_pot is Null (m=0), but will not break anything. 
-        prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
+        prog_spline = UniformCubicInterpolator(orb_fwd.ts, orb_fwd.ys[:,:3])
         prog_pot_translating = ssc.potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
         self.pot_tot = ssc.potential.Potential_Combine(potential_list=[pot_base, prog_pot_translating], units=usys)
         

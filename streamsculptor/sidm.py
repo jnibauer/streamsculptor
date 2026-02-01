@@ -16,7 +16,7 @@ import equinox as eqx
 from jax.scipy import special
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
 
-from streamsculptor import Potential
+from .main import Potential
 import interpax
 import os
 

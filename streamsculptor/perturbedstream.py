@@ -1,4 +1,4 @@
-from streamsculptor import potential
+from . import potential
 from functools import partial
 from astropy.constants import G
 import astropy.coordinates as coord

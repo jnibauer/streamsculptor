@@ -4,7 +4,7 @@ from functools import partial
 from astropy import units as u
 import equinox as eqx
 import diffrax
-from streamsculptor import compute_stream_length, compute_length_oscillations, sample_from_1D_pdf
+from .streamhelpers import compute_stream_length, compute_length_oscillations, sample_from_1D_pdf
 
 class ImpactGenerator:
     """

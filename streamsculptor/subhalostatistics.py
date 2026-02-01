@@ -2,12 +2,11 @@ import jax
 import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 import jax.random as random 
-from streamsculptor import JaxCoords as jc
+from . import JaxCoords as jc
 import equinox as eqx
 from functools import partial
 from jax.scipy.integrate import trapezoid
 import astropy.units as u
-import interpax
 sigma = (180*u.km/u.s).to(u.kpc/u.Myr).value
 
 

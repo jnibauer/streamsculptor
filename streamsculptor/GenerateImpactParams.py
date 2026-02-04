@@ -180,7 +180,6 @@ class ImpactGenerator:
         Returns:
         ImpactW and bImpact_hat [unit vector impact location from backwards integrated patch]
         """
-        tImpact = jnp.maximum(tImpact, tstrip_mean)
         W0 = self.pot.integrate_orbit(w0=particle_mean,t0=tobs,t1=tImpact,ts=jnp.array([tImpact]),solver=diffrax.Dopri8(),atol=1e-7,rtol=1e-7,dtmin=0.1).ys[0]
         # Define basis vecs
         T = W0[3:]

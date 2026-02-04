@@ -33,7 +33,7 @@ term function.
 
 #@eqx.filter_jit
 @partial(jax.jit,static_argnames=('dense','solver','max_steps','rtol','atol','backwards_int','field')) #'jump_ts'
-def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, args=None, rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, max_steps=1_000,jump_ts=None, backwards_int=False,t0=0.0, t1=0.0):
+def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, args=None, rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, max_steps=1_000,jump_ts=None, backwards_int=False,t0=0.0, t1=0.0, step_ts=None):
     """
     Integrate a trajectory on a field.
     w0: pytree initial conditions. Arbitrary shape, must be compatible with the input field.
@@ -51,7 +51,7 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
     rtol: float = rtol  
     atol: float = atol  
     
-    stepsize_controller = PIDController(rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,force_dtmin=True,jump_ts=jump_ts, step_ts=jump_ts)
+    stepsize_controller = PIDController(rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,force_dtmin=True,jump_ts=jump_ts, step_ts=step_ts)
     #max_steps: int = max_steps
     max_steps = int(max_steps)
 

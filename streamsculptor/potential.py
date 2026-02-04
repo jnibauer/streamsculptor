@@ -22,6 +22,7 @@ from quadax import quadgk
 from streamsculptor import Potential
 #from .InterpAGAMA import AGAMA_Spheroid
 import interpax
+from jax.scipy.interpolate import RegularGridInterpolator
 import os
 
 
@@ -563,14 +564,29 @@ class MW_LMC_Potential(Potential):
         LMC_motion_dict = jnp.load(data_path_LMC, allow_pickle=True).item()
         
         # LMC spatial track
-        self.LMC_x = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,0], method='cubic2')
-        self.LMC_y = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,1], method='cubic2')
-        self.LMC_z = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,2], method='cubic2')
+        self.LMC_pos = jax.jit(RegularGridInterpolator(
+            points=(LMC_motion_dict['flip_tsave'],),
+            values=LMC_motion_dict['flip_trajLMC'][:,:3],
+            method='linear',
+            bounds_error=False,
+            fill_value=None
+            ))
+
+        #self.LMC_x = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,0], method='cubic2')
+        #self.LMC_y = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,1], method='cubic2')
+        #self.LMC_z = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,2], method='cubic2')
 
         # MW velocity track
-        self.velocity_func_x = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,3], method='cubic2')
-        self.velocity_func_y = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,4], method='cubic2')
-        self.velocity_func_z = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,5], method='cubic2')
+        self.LMC_vel = jax.jit(RegularGridInterpolator(
+            points=(MW_motion_dict['flip_tsave'],),
+            values=MW_motion_dict['flip_traj'][:,3:6],
+            method='linear',
+            bounds_error=False,
+            fill_value=None
+            ))
+        #self.velocity_func_x = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,3], method='cubic2')
+        #self.velocity_func_y = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,4], method='cubic2')
+        #self.velocity_func_z = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,5], method='cubic2')
 
         # Create a simple but realistic model of the Milky Way with a bulge, a single disk,
         # and a spherical dark halo
@@ -604,11 +620,13 @@ class MW_LMC_Potential(Potential):
 
     @partial(jax.jit,static_argnums=(0,))
     def LMC_center_spline(self,t):
-        return jnp.array([self.LMC_x(t), self.LMC_y(t), self.LMC_z(t)])
+        return self.LMC_pos(jnp.array([t]))[0]
+        #jnp.array([self.LMC_x(t), self.LMC_y(t), self.LMC_z(t)])
         
     @partial(jax.jit,static_argnums=(0,))
     def MW_velocity_func(self,t):
-        return jnp.array([self.velocity_func_x(t), self.velocity_func_y(t), self.velocity_func_z(t)])
+        return self.LMC_vel(jnp.array([t]))[0]
+        #jnp.array([self.velocity_func_x(t), self.velocity_func_y(t), self.velocity_func_z(t)])
 
     @partial(jax.jit,static_argnums=(0,))
     def gradient(self,xyz,t):

@@ -108,6 +108,43 @@ def _compute_c2_coeffs(y, dt):
 # Each interpolation coordinate type (linear / log) has its own kernel
 # so the branch is resolved at __call__ time, not inside a traced function.
 
+# ---- Linear interpolation kernels ----------------------------------------
+
+@jax.jit
+def _eval_linear(t_queries, t_min, dt, n_points, y):
+    """
+    Evaluate linear (C⁰) interpolator at an array of query times on a linear-uniform grid.
+    
+    Simple lerp between adjacent points — no derivatives, not differentiable.
+    """
+    idx_f = (t_queries - t_min) / dt
+    idx0  = jnp.floor(idx_f).astype(jnp.int32)
+    idx0  = jnp.clip(idx0, 0, n_points - 2)   # need idx0, idx0+1
+    
+    s = idx_f - idx0                           # fractional part, (Q,)
+    
+    y0 = y[idx0]                               # (Q, D)
+    y1 = y[idx0 + 1]
+    
+    # Linear interpolation: (1-s)*y0 + s*y1
+    s = s[:, None]                             # (Q, 1) for broadcast
+    return (1.0 - s) * y0 + s * y1             # (Q, D)
+
+@jax.jit
+def _eval_linear_log(t_queries, log_t_min, d_log_t, n_points, y):
+    """Linear interpolation on a log-uniform grid."""
+    idx_f = (jnp.log(t_queries) - log_t_min) / d_log_t
+    idx0  = jnp.floor(idx_f).astype(jnp.int32)
+    idx0  = jnp.clip(idx0, 0, n_points - 2)
+    
+    s = idx_f - idx0
+    
+    y0 = y[idx0]
+    y1 = y[idx0 + 1]
+    
+    s = s[:, None]
+    return (1.0 - s) * y0 + s * y1
+
 # ---- Catmull-Rom kernels ------------------------------------------------
 
 @jax.jit
@@ -251,6 +288,204 @@ def _check_uniform_spacing(t_transformed):
 # Public classes
 # ===========================================================================
 
+class UniformLinearInterpolator:
+    """
+    Fast O(1) piecewise linear interpolator (C⁰ continuous).
+    
+    Simple linear interpolation between adjacent points. Fastest option
+    but not differentiable (discontinuous first derivative). Use this
+    when:
+    
+    - Speed is critical and you don't need smoothness
+    - You're interpolating discrete/categorical data
+    - You don't need autodiff through the interpolator
+    
+    For smooth interpolation, use ``UniformCubicInterpolator`` (C¹) or
+    ``UniformSplineC2Interpolator`` (C²) instead.
+    
+    Supports CPU and GPU transparently: all arrays are pinned to the
+    current JAX default device at construction time.
+    
+    Parameters
+    ----------
+    t : array_like, shape (N,)
+        Time points.  Must be uniformly spaced in linear space when
+        ``log_spacing=False`` (default), or uniformly spaced in
+        ``log(t)`` when ``log_spacing=True``.  All values must be
+        positive when ``log_spacing=True``.
+    y : array_like, shape (N,) or (N, D)
+        Function values at each time point.  All values must be positive
+        when ``log_values=True``.
+    check_uniform : bool, optional
+        If ``True``, verify that ``t`` is uniformly spaced (in the
+        relevant coordinate) and raise ``ValueError`` if not.  Set to
+        ``False`` to skip the check when you know the grid is uniform.
+        Default is ``False``.
+    log_spacing : bool, optional
+        If ``True``, the grid is uniform in ``log(t)`` rather than in
+        ``t``.  The O(1) index lookup becomes
+        ``idx = (log(t_query) - log(t_min)) / d_log_t``.  Use this when
+        your time array was generated with ``jnp.logspace`` or equivalent.
+        Default is ``False``.
+    log_values : bool, optional
+        If ``True``, interpolation is performed on ``log(y)`` and the
+        result is exponentiated before returning.  Useful when ``y``
+        spans several orders of magnitude and you want the interpolation
+        error to be relative rather than absolute.  Requires all values
+        in ``y`` to be strictly positive.  Default is ``False``.
+    
+    Notes
+    -----
+    Linear interpolation is C⁰ continuous (values are continuous but
+    derivatives are not). This means:
+    
+    - ``jax.grad(interp)`` will return incorrect gradients
+    - Use only when you don't need differentiability
+    - For smooth gradients, use ``UniformCubicInterpolator`` instead
+    
+    Examples
+    --------
+    Linear grid, 1-D values:
+    
+    >>> t = jnp.linspace(0, 10, 1000)
+    >>> y = jnp.sin(t)
+    >>> interp = UniformLinearInterpolator(t, y)
+    >>> interp(5.5)                              # scalar → scalar
+    
+    Linear grid, multi-dimensional values:
+    
+    >>> y2d = jnp.stack([jnp.sin(t), jnp.cos(t)], axis=1)  # (1000, 2)
+    >>> interp = UniformLinearInterpolator(t, y2d)
+    >>> interp(jnp.array([1.0, 2.0, 3.0]))       # (3,) → (3, 2)
+    
+    Log-spaced grid:
+    
+    >>> r = jnp.logspace(-2, 2, 1000)            # 0.01 … 100
+    >>> rho = 1.0 / r**2
+    >>> interp = UniformLinearInterpolator(r, rho, log_spacing=True)
+    >>> interp(jnp.array([0.5, 1.0, 5.0]))
+    
+    Batch queries (efficient parallelism on GPU):
+    
+    >>> t_queries = jnp.linspace(0, 10, 1_000_000)
+    >>> result = interp(t_queries)               # 1M queries, GPU parallel
+    """
+    
+    def __init__(self, t, y, check_uniform=False,
+                 log_spacing=False, log_values=False):
+        t = jnp.asarray(t)
+        y = jnp.asarray(y)
+        
+        if y.ndim == 1:
+            y = y[:, None]
+        
+        n = len(t)
+        if n < 2:
+            raise ValueError("Linear interpolation requires at least 2 points")
+        
+        self._log_spacing    = log_spacing
+        self._log_values     = log_values
+        self._squeeze_output = (y.shape[1] == 1)
+        
+        # ------------------------------------------------------------------
+        # Coordinate transform
+        # ------------------------------------------------------------------
+        if log_spacing:
+            t_coord = jnp.log(t)
+        else:
+            t_coord = t
+        
+        coord_min = t_coord[0]
+        coord_max = t_coord[-1]
+        d_coord   = (coord_max - coord_min) / (n - 1)
+        
+        if check_uniform:
+            _check_uniform_spacing(t_coord)
+        
+        self._coord_min = coord_min
+        self._d_coord   = d_coord
+        self.n_points   = n
+        
+        # ------------------------------------------------------------------
+        # Value transform
+        # ------------------------------------------------------------------
+        if log_values:
+            y = jnp.log(y)
+        
+        # Pin to current device (CPU or GPU)
+        self.y = jax.device_put(y)
+    
+    # ------------------------------------------------------------------
+    # Single-point fast path
+    # ------------------------------------------------------------------
+    @partial(jax.jit, static_argnums=(0,))
+    def _eval_scalar(self, t):
+        """Scalar eval — linear or log spacing, selected at trace time."""
+        if self._log_spacing:
+            idx_f = (jnp.log(t) - self._coord_min) / self._d_coord
+        else:
+            idx_f = (t - self._coord_min) / self._d_coord
+        
+        idx0 = jnp.floor(idx_f).astype(jnp.int32)
+        idx0 = jnp.clip(idx0, 0, self.n_points - 2)
+        s    = idx_f - idx0
+        
+        y0 = self.y[idx0]
+        y1 = self.y[idx0 + 1]
+        
+        result = (1.0 - s) * y0 + s * y1
+        
+        if self._log_values:
+            result = jnp.exp(result)
+        
+        return result
+    
+    def __call__(self, t):
+        """
+        Evaluate interpolator at time(s) t.
+        
+        Parameters
+        ----------
+        t : float or array_like
+            Query time(s) in the *original* coordinate (not log-transformed
+            even when ``log_spacing=True``; the transform is internal).
+        
+        Returns
+        -------
+        array_like
+            Interpolated values.  Shape rules:
+            
+            =============  ============  ==============
+            ``t`` shape    ``y`` shape   output shape
+            =============  ============  ==============
+            scalar         (N,)          scalar
+            scalar         (N, D)        (D,)
+            (Q,)           (N,)          (Q,)
+            (Q,)           (N, D)        (Q, D)
+            =============  ============  ==============
+        """
+        t = jnp.asarray(t)
+        
+        if t.ndim == 0:
+            result = self._eval_scalar(t)
+        else:
+            if self._log_spacing:
+                result = _eval_linear_log(
+                    t, self._coord_min, self._d_coord,
+                    self.n_points, self.y
+                )
+            else:
+                result = _eval_linear(
+                    t, self._coord_min, self._d_coord,
+                    self.n_points, self.y
+                )
+            if self._log_values:
+                result = jnp.exp(result)
+        
+        if self._squeeze_output:
+            result = result.squeeze(axis=-1)
+        return result
+
 class UniformCubicInterpolator:
     """
     Fast O(1) cubic Hermite interpolator for uniformly-spaced data.
@@ -259,8 +494,9 @@ class UniformCubicInterpolator:
     perfect for dynamics and orbit integration.  No binary search needed
     on uniform grids (linear or log).
 
-    Recommended for most uses.  Use ``UniformSplineC2Interpolator`` only if
-    you specifically need C² continuity for higher-order autodiff.
+    The neighbourhood for each query is found with O(1) arithmetic,
+    and the cubic Hermite polynomial is evaluated with minimal overhead.
+    Will JIT-compile to a single XLA graph for maximum performance.
 
     Supports CPU and GPU transparently: arrays are pinned to the current
     JAX default device at construction time.

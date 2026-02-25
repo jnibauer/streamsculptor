@@ -4,9 +4,10 @@ import jax.numpy as jnp
 import equinox as eqx
 import diffrax
 import optimistix as optx
+from typing import Any
 
-# Assuming streamsculptor imports remain the same
 from streamsculptor.fields import integrate_field
+from streamsculptor.main import usys
 
 jax.config.update("jax_enable_x64", True)
 
@@ -16,16 +17,16 @@ class RestrictedNbody_generator(eqx.Module):
     This prevents JAX from recompiling or failing when you pass this object 
     into jitted functions or scan loops.
     """
-    potential: any
-    progenitor_potential: any
-    interp_prog: any
+    potential: Any
+    progenitor_potential_cls: type = eqx.field(static=True) # Static because it's a class
+    interp_prog: Any
     r_esc: float
 
     def __init__(self, potential, progenitor_potential, interp_prog, r_esc=1.0):
         self.potential = potential
-        self.progenitor_potential = progenitor_potential
+        self.progenitor_potential_cls = progenitor_potential
         self.interp_prog = interp_prog
-        self.r_esc = r_esc
+        self.r_esc = float(r_esc)
 
     def cost_func(self, params, args):
         """
@@ -36,7 +37,7 @@ class RestrictedNbody_generator(eqx.Module):
         locs, t, inside_bool = args
         mass_param, r_s_param = 10**params[0], 10**params[1]
         
-        pot_prog_curr = self.progenitor_potential(m=mass_param, r_s=r_s_param, units=self.potential.units)
+        pot_prog_curr = self.progenitor_potential_cls(m=mass_param, r_s=r_s_param, units=self.potential.units)
         density_at_locs = jax.vmap(pot_prog_curr.density, in_axes=(0, None))(locs, t)
         
         # Avoid log(0) by using jnp.where
@@ -46,12 +47,11 @@ class RestrictedNbody_generator(eqx.Module):
         log_like = -mass_param + jnp.sum(log_density)
         return -log_like
 
+    @eqx.filter_jit
     def fit_monopole(self, init_params, x, t, inside_bool, maxiter):
         """
         Uses Optimistix's Newton solver to find the exact root.
         """
-        # optx.Newton computes the exact Hessian. If that becomes too slow 
-        # for a very complex potential, you can instantly swap this to optx.BFGS(rtol, atol)
         solver = optx.Newton(rtol=1e-5, atol=1e-5)
         args = (x, t, inside_bool)
 
@@ -72,6 +72,7 @@ class RestrictedNbody_generator(eqx.Module):
         mass_left_bool = inside_bool.sum() > 0
         return jax.lax.cond(mass_left_bool, mass_left, dissolved, init_params)
 
+    @eqx.filter_jit
     def get_params(self, t, coords, current_mass, current_rs, maxiter=5):
         """
         Extracts particles inside r_esc and triggers the Newton fit.
@@ -87,6 +88,7 @@ class RestrictedNbody_generator(eqx.Module):
        
         return mass_fit, r_s_fit
 
+    @eqx.filter_jit
     def term(self, t, coords, args):
         """
         The diffrax ODETerm right-hand side.
@@ -100,19 +102,18 @@ class RestrictedNbody_generator(eqx.Module):
         prog_center = self.interp_prog.evaluate(t)[:3]
         x_rel = x - prog_center
         
-        pot_prog_curr = self.progenitor_potential(m=mass, r_s=rs, units=self.potential.units)
+        pot_prog_curr = self.progenitor_potential_cls(m=mass, r_s=rs, units=self.potential.units)
         acceleration_internal = -jax.vmap(pot_prog_curr.gradient, in_axes=(0, None))(x_rel, t)
         
         acceleration = acceleration_external + acceleration_internal
         return jnp.hstack([v, acceleration])
 
-
-def integrate_restricted_Nbody(w0, ts, interrupt_ts, field, solver=diffrax.Dopri8(scan_kind='bounded'), args=None, rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, maxiter=5, max_steps=1_000, mass_init=None, r_s_init=None):
+@eqx.filter_jit
+def integrate_restricted_Nbody(w0, ts, interrupt_ts, field, solver=diffrax.Dopri8(scan_kind='bounded'), rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, maxiter=5, max_steps=1_000, mass_init=None, r_s_init=None):
     """
-    Much cleaner scan loop. We don't recreate the field object, we just update the 
+    Clean scan loop. We don't recreate the field object, we just update the 
     mass and r_s parameters flowing through the carry.
     """
-    @eqx.filter_jit
     def body_func(carry, idx):
         wcurr, tcurr, tstop, param_mass, param_rs = carry
         
@@ -123,14 +124,20 @@ def integrate_restricted_Nbody(w0, ts, interrupt_ts, field, solver=diffrax.Dopri
         ts_curr = jnp.array([tcurr, jnp.clip(tstop, -jnp.inf, ts[-1])])
         
         # Pass the dynamic mass/rs as args so integrate_field can give them to field.term
-        # If your integrate_field routine doesn't natively accept dynamic args for the field, 
-        # you may need to tweak it to pass (new_mass, new_rs) into the ODETerm.
         field_args = (new_mass, new_rs) 
         
         sol = integrate_field(
-            w0=wcurr, ts=ts_curr, solver=solver, field=field, 
-            args=field_args, rtol=rtol, atol=atol, dtmin=dtmin, 
-            dtmax=dtmax, max_steps=max_steps
+            w0=wcurr, 
+            ts=ts_curr, 
+            dense=False,
+            solver=solver, 
+            field=field, 
+            args=field_args, 
+            rtol=rtol, 
+            atol=atol, 
+            dtmin=dtmin, 
+            dtmax=dtmax, 
+            max_steps=max_steps
         )
         w_next = sol.ys[-1]
         
@@ -145,5 +152,5 @@ def integrate_restricted_Nbody(w0, ts, interrupt_ts, field, solver=diffrax.Dopri
     ids = jnp.arange(len(interrupt_ts))
     
     # Run the scan
-    final_carry, all_states = jax.lax.scan(body_func, init_carry, ids)
+    _, all_states = jax.lax.scan(body_func, init_carry, ids)
     return all_states

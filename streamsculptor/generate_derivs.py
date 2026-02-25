@@ -1,32 +1,24 @@
-
-from gala.units import UnitSystem
-from astropy import units as u
-usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
-import jax.numpy as jnp
-
-
 import jax
-jax.config.update("jax_enable_x64", True)
-
-from streamsculptor import potential
-from streamsculptor import JaxCoords as jc
+import jax.numpy as jnp
+from astropy import units as u
 import diffrax
-
-import streamsculptor as ssc
-
 import tqdm
-import numpy as np
 
+# Ensure we import the refactored modules
+from streamsculptor.main import usys
+from streamsculptor import potential
+import streamsculptor as ssc
 from streamsculptor import perturbative as pert
 from streamsculptor.GenerateImpactParams import ImpactGenerator
 
+jax.config.update("jax_enable_x64", True)
 
 def get_derivs(
-                prog_wtoday: jnp.array,
-                t_age: jnp.array,
-                t_dissolve: jnp.array,
-                log10_min_mass: jnp.array,
-                log10_max_mass: jnp.array,
+                prog_wtoday: jnp.ndarray,
+                t_age: float,
+                t_dissolve: float,
+                log10_min_mass: float,
+                log10_max_mass: float,
                 phi1_bounds: list,
                 phi1_exclude: list,
                 stream_seednum: int,
@@ -37,13 +29,13 @@ def get_derivs(
                 phi1_function: callable, # takes N x 6 --> phi1 (length N)
                 pot: callable,
                 path: str,
-                N_batch = 500,
-                atol=1e-11,
-                rtol=1e-11,
-                bmax_fac = 10.,
-                phi1window = 0.5,
-                N_arm = 5_000,
-                save_iter_start = 0,
+                N_batch: int = 500,
+                atol: float = 1e-11,
+                rtol: float = 1e-11,
+                bmax_fac: float = 10.0,
+                phi1window: float = 0.5,
+                N_arm: int = 5_000,
+                save_iter_start: int = 0,
                 ):
 
     """
@@ -51,15 +43,15 @@ def get_derivs(
 
     Parameters
     ----------
-    prog_wtoday : jnp.array
+    prog_wtoday : jnp.ndarray
         Present-day phase-space coordinates (6D) of the progenitor.
-    t_age : jnp.array
+    t_age : float
         Total age of the stream in Gyr (used to integrate backward). Must be positive.
-    t_dissolve : jnp.array
+    t_dissolve : float
         Time since dissolution began (Gyr). Must be negative.
-    log10_min_mass : jnp.array
+    log10_min_mass : float
         Log10 of the minimum subhalo mass.
-    log10_max_mass : jnp.array
+    log10_max_mass : float
         Log10 of the maximum subhalo mass.
     phi1_bounds : list
         List defining the angular bounds in phi1 coordinates for impact consideration.
@@ -109,11 +101,12 @@ def get_derivs(
     """
 
     print('backend –– ' + str(jax.devices()[0]))
-    #pot = potential.GalaMilkyWayPotential(units=usys)
-    IC = pot.integrate_orbit(w0=prog_wtoday, t0=0.0, t1=-t_age,ts=jnp.array([-t_age])).ys[0]
-    ts = jnp.hstack([jnp.linspace(-t_age,t_dissolve,N_arm), jnp.array([0.0])])
+    
+    IC = pot.integrate_orbit(w0=prog_wtoday, t0=0.0, t1=-t_age, ts=jnp.array([-t_age])).ys[0]
+    ts = jnp.hstack([jnp.linspace(-t_age, t_dissolve, N_arm), jnp.array([0.0])])
+    
     print('generating base stream')
-    l ,t = ssc.gen_stream_vmapped_Chen25(pot_base=pot,
+    l, t = ssc.gen_stream_vmapped_Chen25(pot_base=pot,
                                          prog_w0=IC,
                                          ts=ts,
                                          key=jax.random.PRNGKey(stream_seednum),
@@ -121,14 +114,13 @@ def get_derivs(
                                          atol=1e-7,
                                          rtol=1e-7,
                                          solver=diffrax.Dopri8(),
-                                         prog_pot=potential.PlummerPotential(m=Msat,r_s=r_s,units=usys),)
+                                         prog_pot=potential.PlummerPotential(m=Msat, r_s=r_s, units=usys))
 
-    stream = jnp.vstack([l,t])
+    stream = jnp.vstack([l, t])
     phi1_model = phi1_function(stream)
 
     mass_lin = 10**jnp.linspace(log10_min_mass, log10_max_mass, 50_000)
-    prob = mass_lin**(-.3)
-    
+    prob = mass_lin**(-0.3)
     
     # How many iterations do we need to get to the target number of stars?
     N_iter = int(jnp.ceil(target_num / N_batch))
@@ -143,44 +135,46 @@ def get_derivs(
                             Msat=Msat,
                             key=jax.random.PRNGKey(stream_seednum),
                             units=usys,
-                            prog_pot=potential.PlummerPotential(m=Msat,r_s=r_s,units=usys),
-                            rtol = 1e-7,
-                            atol = 1e-7,
+                            prog_pot=potential.PlummerPotential(m=Msat, r_s=r_s, units=usys),
+                            rtol=1e-7,
+                            atol=1e-7,
                             solver=diffrax.Dopri8())
 
     keys = jax.random.split(key, N_iter)
     print('running perturbation loop for ' + str(N_iter) + ' iterations')
+    
     for i in tqdm.tqdm(range(N_iter)):
-        mass_samps = ssc.sample_from_1D_pdf(x=mass_lin,y=prob,key=keys[i], num_samples=N_batch)
-        rs_samps = 1.05 * jnp.sqrt(mass_samps/1e8)
+        mass_samps = ssc.sample_from_1D_pdf(x=mass_lin, y=prob, key=keys[i], num_samples=N_batch)
+        rs_samps = 1.05 * jnp.sqrt(mass_samps / 1e8)
         
         # Generate random int
         keynew = jax.random.split(keys[i], 1)[0]
-        rand_int = jax.random.randint(key=keynew, shape=(1,), minval=0, maxval=10_000_000)[0]
+        rand_int = int(jax.random.randint(key=keynew, shape=(1,), minval=0, maxval=10_000_000)[0])
+        
         ImpactGen = ImpactGenerator(
                                 pot=pot, 
                                 tobs=0.0, 
                                 stream=stream, 
                                 stream_phi1=phi1_model, 
                                 phi1_bounds=phi1_bounds,
-                                tImpactBounds=[-t_age,0.],
+                                tImpactBounds=[-t_age, 0.],
                                 phi1window=phi1window,
                                 NumImpacts=len(mass_samps),
-                                bImpact_bounds=[0,1.05 * jnp.sqrt(mass_samps/1e8) * bmax_fac],
-                                stripping_times=jnp.hstack([ts[:-1],ts[:-1]]),
-                                phi1_exclude = phi1_exclude,
-                                prog_today = prog_wtoday,
-                                seednum=int(rand_int))
+                                bImpact_bounds=jnp.column_select([jnp.zeros_like(mass_samps), 1.05 * jnp.sqrt(mass_samps / 1e8) * bmax_fac]) if jnp.isscalar(bmax_fac) else [0, 1.05 * jnp.sqrt(mass_samps / 1e8) * bmax_fac],
+                                stripping_times=jnp.hstack([ts[:-1], ts[:-1]]),
+                                phi1_exclude=phi1_exclude,
+                                prog_today=prog_wtoday,
+                                seednum=rand_int)
         
         ImpactDict = ImpactGen.get_subhalo_ImpactParams()
-        assert jnp.isnan( ImpactDict['CartesianImpactParams'].sum() ) == False # check for nans
+        assert jnp.isnan(ImpactDict['CartesianImpactParams'].sum()) == False # check for nans
 
         sub_pot = ssc.potential.SubhaloLinePotentialCustom_fromFunc(
-                    func = potential.HernquistPotential, 
-                    m =jnp.ones(mass_samps.shape[0]), 
+                    func=potential.HernquistPotential, 
+                    m=jnp.ones(mass_samps.shape[0]), 
                     r_s=rs_samps,
-                    subhalo_x0=ImpactDict['CartesianImpactParams'][:,:3],
-                    subhalo_v=ImpactDict['CartesianImpactParams'][:,3:],
+                    subhalo_x0=ImpactDict['CartesianImpactParams'][:, :3],
+                    subhalo_v=ImpactDict['CartesianImpactParams'][:, 3:],
                     subhalo_t0=ImpactDict['ImpactFrameParams']['tImpact'],
                     t_window=150.0,
                     units=usys)
@@ -190,33 +184,21 @@ def get_derivs(
                                            potential_perturbation=sub_pot,
                                            BaseStreamModel=BaseModel,
                                            units=usys)
+                                           
         pert_out = pertgen.compute_perturbation_OTF(
                                             solver=diffrax.Dopri8(),
                                             rtol=rtol,
                                             atol=atol,
                                             dtmin=0.01, 
-                                            cpu=False) #1e-14, 1e-14
-
+                                            cpu=False)
 
         dict_save = dict(pert_out=pert_out,
-                        r_s_root = sub_pot.r_s,
+                        r_s_root=sub_pot.r_s,
                         ImpactFrameParams=ImpactDict['ImpactFrameParams'])
-        jnp.save(path + '/' + str(i + save_iter_start),dict_save)
+                        
+        jnp.save(f"{path}/{i + save_iter_start}.npy", dict_save)
 
-        # Clean up
-        del(mass_samps)
-        del(rs_samps)
-        del(ImpactGen)
-        del(ImpactDict)
-        del(sub_pot)
-        del(pertgen)
-        del(pert_out)
-        del(dict_save)
+        # Clean up memory
+        del mass_samps, rs_samps, ImpactGen, ImpactDict, sub_pot, pertgen, pert_out, dict_save
     
     return None
-
-
-
-        
-    
-    

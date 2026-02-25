@@ -1,21 +1,16 @@
 from functools import partial
-from astropy.constants import G
-import astropy.coordinates as coord
-import astropy.units as u
-# gala
-from gala.units import dimensionless, UnitSystem
-
 import jax
 import jax.numpy as jnp
-jax.config.update("jax_enable_x64", True)
-
-from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTerminatingEvent, DirectAdjoint, RecursiveCheckpointAdjoint, ConstantStepSize, Euler, StepTo, ForwardMode
-import diffrax
 import equinox as eqx
-usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
-from streamsculptor import Potential
+import diffrax
+from diffrax import diffeqsolve, ODETerm, Dopri8, SaveAt, PIDController, ForwardMode
+from typing import Any
+
 from streamsculptor import eval_dense_stream_id
 from streamsculptor import potential
+from streamsculptor.main import usys
+
+jax.config.update("jax_enable_x64", True)
 
 """
 Not all integrations are hamiltonian. fields.py allows for the integration
@@ -30,10 +25,12 @@ coordinates. The derivatives are evolved via an update rule, specified by the
 term function.
 """
 
+# =============================================================================
+# Core Integrator
+# =============================================================================
 
-#@eqx.filter_jit
-@partial(jax.jit,static_argnames=('dense','solver','max_steps','rtol','atol','backwards_int','field')) #'jump_ts'
-def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'),field=None, args=None, rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, max_steps=1_000,jump_ts=None, backwards_int=False,t0=0.0, t1=0.0, step_ts=None):
+@eqx.filter_jit
+def integrate_field(w0=None, ts=None, dense=False, solver=diffrax.Dopri8(scan_kind='bounded'), field=None, args=None, rtol=1e-7, atol=1e-7, dtmin=0.05, dtmax=None, max_steps=1_000, jump_ts=None, backwards_int=False, t0=0.0, t1=0.0, step_ts=None):
     """
     Integrate a trajectory on a field.
     w0: pytree initial conditions. Arbitrary shape, must be compatible with the input field.
@@ -46,13 +43,9 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
     max_steps: maximum number of allowed timesteps
     """
     term = ODETerm(field.term)
-    saveat = SaveAt(t0=False, t1=False,ts=ts,dense=dense)
+    saveat = SaveAt(t0=False, t1=False, ts=ts, dense=dense)
     
-    rtol: float = rtol  
-    atol: float = atol  
-    
-    stepsize_controller = PIDController(rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,force_dtmin=True,jump_ts=jump_ts, step_ts=step_ts)
-    #max_steps: int = max_steps
+    stepsize_controller = PIDController(rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax, force_dtmin=True, jump_ts=jump_ts, step_ts=step_ts)
     max_steps = int(max_steps)
 
     ## Below we specify how to handle t0, t1
@@ -62,31 +55,25 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
         """
         Integrating forward in time: t1 > t0
         """
-        t0 = ts.min()
-        t1 = ts.max()
-        return t0, t1
+        return ts.min(), ts.max()
     def true_func():
         """
         Integrating backwards in time: t1 < t0
         """
-        t0 = ts.max()
-        t1 = ts.min()
-        return t0, t1
+        return ts.max(), ts.min()
 
     def t0_t1_are_different(): 
         return t0, t1
     def t0_t1_are_same():
-        t0, t1 = jax.lax.cond(backwards_int, true_func, false_func)
-        return t0, t1
+        return jax.lax.cond(backwards_int, true_func, false_func)
     
-    t0, t1 = jax.lax.cond(t0 != t1, t0_t1_are_different, t0_t1_are_same)
-
+    t0_val, t1_val = jax.lax.cond(t0 != t1, t0_t1_are_different, t0_t1_are_same)
 
     solution = diffeqsolve(
         terms=term,
         solver=solver,
-        t0= t0,
-        t1= t1,
+        t0=t0_val,
+        t1=t1_val,
         y0=w0,
         dt0=None,
         saveat=saveat,
@@ -98,26 +85,38 @@ def integrate_field(w0=None,ts=None, dense=False, solver=diffrax.Dopri8(scan_kin
     )
     return solution
 
-class hamiltonian_field:
+# =============================================================================
+# Field Definitions
+# =============================================================================
+
+class hamiltonian_field(eqx.Module):
     """
     Standard hamiltonian field.
     This is the same as the velocity_acceleration term in integrate orbit.
     This class is redundant, and only included for pedagogical/tutorial purposes.
     """
+    pot: Any
+
     def __init__(self, pot):
         self.pot = pot
-    @partial(jax.jit, static_argnums=(0,))
-    def term(self,t,xv,args):
-        x, v = xv[:3], xv[3:]
-        acceleration = -self.pot.gradient(x,t)
-        return jnp.hstack([v,acceleration])
 
-class Nbody_field:
+    @eqx.filter_jit
+    def term(self, t, xv, args):
+        x, v = xv[:3], xv[3:]
+        acceleration = -self.pot.gradient(x, t)
+        return jnp.hstack([v, acceleration])
+
+class Nbody_field(eqx.Module):
     """
     Nbody field
     The term computes pairwise forces between particles.
     """
-    def __init__(self, ext_pot=None, masses=None, units=None, eps=1e-3):
+    ext_pot: Any
+    masses: jnp.ndarray
+    _G: float = eqx.field(static=True)
+    eps: float = eqx.field(static=True)
+
+    def __init__(self, ext_pot=None, masses=None, units=usys, eps=1e-3):
         """
         ext_pot: external potential. If None, no external potential is used.
         masses: array of masses for the N particles
@@ -127,10 +126,11 @@ class Nbody_field:
         if ext_pot is None:
             ext_pot = potential.PlummerPotential(m=0.0, r_s=1.0, units=usys)
         self.ext_pot = ext_pot
-        self.masses = masses
-        self._G = jnp.array(G.decompose(units).value)
-        self.eps = eps
-    @partial(jax.jit, static_argnums=(0,))
+        self.masses = jnp.asarray(masses)
+        self._G = float(units.G)
+        self.eps = float(eps)
+
+    @eqx.filter_jit
     def term(self, t, xv, args):
         """
         xv: (N,6) array of positions and velocities
@@ -154,9 +154,7 @@ class Nbody_field:
 
         return jnp.hstack([v, total_acceleration])
         
-
-
-class MassRadiusPerturbation_OTF:
+class MassRadiusPerturbation_OTF(eqx.Module):
     """
     Applying perturbation theory in the mass and radius of a 
     subhalo potential. 
@@ -169,10 +167,13 @@ class MassRadiusPerturbation_OTF:
     coords: [ [x,y,z, vx, vy, vz],
        [dx/deps,..., dvx/deps,..., d^2x/dthetadeps, ..., d^2vx/dthetadeps]  ]
     """
+    pertgen: Any
+
     def __init__(self, perturbation_generator):
         self.pertgen = perturbation_generator
-    @partial(jax.jit, static_argnums=(0,))
-    def term(self,t, coords, args):
+
+    @eqx.filter_jit
+    def term(self, t, coords, args):
         """
         x0,v0: base position and velocity
         x1, v1: mass perturbations in each coord
@@ -181,31 +182,31 @@ class MassRadiusPerturbation_OTF:
         # Unperturbed, base flow
         x0, v0 = coords[0][:3], coords[0][3:6] #length 6 array
         # Epsilon Derivs
-        x1, v1 = coords[1][:,:3], coords[1][:,3:6] #nSHS x 3
+        x1, v1 = coords[1][:, :3], coords[1][:, 3:6] #nSHS x 3
         # Structural derivs
-        dx1_dtheta, dv1_dtheta = coords[1][:,6:9], coords[1][:,9:]
+        dx1_dtheta, dv1_dtheta = coords[1][:, 6:9], coords[1][:, 9:]
 
-        acceleration0 = -self.pertgen.gradientPotentialBase(x0,t)
+        acceleration0 = -self.pertgen.gradientPotentialBase(x0, t)
 
         # acceleration due to perturbation
-        acceleration1 = -self.pertgen.gradientPotentialPerturbation_per_SH(x0,t) # nSH x 3
+        acceleration1 = -self.pertgen.gradientPotentialPerturbation_per_SH(x0, t) # nSH x 3
         # tidal tensor
-        d2H_dq2 = -jax.jacrev(self.pertgen.gradientPotentialBase)(x0,t) 
+        d2H_dq2 = -jax.jacrev(self.pertgen.gradientPotentialBase)(x0, t) 
         # For the Hamiltonian considered, dp/deps is just the integrated acceleration. Relabling...
         d_qdot_d_eps = v1 
         # Next, injected acceleration: subhalo acceleration + matmul(tidal tensor, dq/deps)
-        d_pdot_d_eps = acceleration1 + jnp.einsum('ij,kj->ki',d2H_dq2,x1)#,optimize='optimal') #nSH x 3
+        d_pdot_d_eps = acceleration1 + jnp.einsum('ij,kj->ki', d2H_dq2, x1) #nSH x 3
         
         # Now handle radius deviations
-        acceleration1_r = -self.pertgen.gradientPotentialStructural_per_SH(x0,t) # nSH x 3
+        acceleration1_r = -self.pertgen.gradientPotentialStructural_per_SH(x0, t) # nSH x 3
         d_qalpha1dot_dtheta = dv1_dtheta
-        d_palpha1dot_dtheta = acceleration1_r + jnp.einsum('ij,kj->ki',d2H_dq2,dx1_dtheta)#,optimize='optimal')#jnp.matmul(d2H_dq2,dx1_dtheta)
+        d_palpha1dot_dtheta = acceleration1_r + jnp.einsum('ij,kj->ki', d2H_dq2, dx1_dtheta)
         
         # Package the output: [6, Nsh x 12]
-        return [jnp.hstack([v0,acceleration0]), 
-                jnp.hstack([d_qdot_d_eps,d_pdot_d_eps, d_qalpha1dot_dtheta, d_palpha1dot_dtheta])]
+        return [jnp.hstack([v0, acceleration0]), 
+                jnp.hstack([d_qdot_d_eps, d_pdot_d_eps, d_qalpha1dot_dtheta, d_palpha1dot_dtheta])]
 
-class MassRadiusPerturbation_Interp:
+class MassRadiusPerturbation_Interp(eqx.Module):
     """
     Apply perturbation theory in the mass and radius of a subhalo potential.
     Interpolated version. BaseStreamModel must have dense=True in order to support
@@ -219,10 +220,14 @@ class MassRadiusPerturbation_Interp:
     coords: shape nSH x 12
     coords[0,:]: [dx/deps,..., dvx/deps,..., d^2x/dthetadeps, ..., d^2vx/dthetadeps] 
     """
+    pertgen: Any
+    base_stream: Any
+
     def __init__(self, perturbation_generator):
         self.pertgen = perturbation_generator
         self.base_stream = perturbation_generator.base_stream
-    @partial(jax.jit, static_argnums=(0,))
+
+    @eqx.filter_jit
     def term(self, t, coords, args):
         """
         args is a dictionary:  args['idx'] is the current particle index, and args['tail_bool'] specifies the stream arm
@@ -232,32 +237,32 @@ class MassRadiusPerturbation_Interp:
         """
         idx, tail_bool = args['idx'], args['tail_bool']
         x0v0 = eval_dense_stream_id(time=t, interp_func=self.base_stream.stream_interp, idx=idx, lead=tail_bool)
+        
         # Unperturbed, base flow
         x0, v0 = x0v0[:3], x0v0[3:]
         # Epsilon Derivs
-        x1, v1 = coords[:,:3], coords[:,3:6] #nSHS x 3
+        x1, v1 = coords[:, :3], coords[:, 3:6] #nSHS x 3
         # Structural derivs
-        dx1_dtheta, dv1_dtheta = coords[:,6:9], coords[:,9:]
+        dx1_dtheta, dv1_dtheta = coords[:, 6:9], coords[:, 9:]
 
         # acceleration due to perturbation
-        acceleration1 = -self.pertgen.gradientPotentialPerturbation_per_SH(x0,t) # nSH x 3
+        acceleration1 = -self.pertgen.gradientPotentialPerturbation_per_SH(x0, t) # nSH x 3
         # tidal tensor
-        d2H_dq2 = -jax.jacrev(self.pertgen.gradientPotentialBase)(x0,t) 
+        d2H_dq2 = -jax.jacrev(self.pertgen.gradientPotentialBase)(x0, t) 
         # For the Hamiltonian considered, dp/deps is just the integrated acceleration. Relabling...
         d_qdot_d_eps = v1 
         # Next, injected acceleration: subhalo acceleration + matmul(tidal tensor, dq/deps)
-        d_pdot_d_eps = acceleration1 + jnp.einsum('ij,kj->ki',d2H_dq2,x1)#,optimize='optimal') #nSH x 3
+        d_pdot_d_eps = acceleration1 + jnp.einsum('ij,kj->ki', d2H_dq2, x1) #nSH x 3
         
         # Now handle radius deviations
-        acceleration1_r = -self.pertgen.gradientPotentialStructural_per_SH(x0,t) # nSH x 3
+        acceleration1_r = -self.pertgen.gradientPotentialStructural_per_SH(x0, t) # nSH x 3
         d_qalpha1dot_dtheta = dv1_dtheta
-        d_palpha1dot_dtheta = acceleration1_r + jnp.einsum('ij,kj->ki',d2H_dq2,dx1_dtheta)#,optimize='optimal')#jnp.matmul(d2H_dq2,dx1_dtheta)
+        d_palpha1dot_dtheta = acceleration1_r + jnp.einsum('ij,kj->ki', d2H_dq2, dx1_dtheta)
         
         # Package the output: [Nsh x 12]
-        return jnp.hstack([d_qdot_d_eps,d_pdot_d_eps, d_qalpha1dot_dtheta, d_palpha1dot_dtheta])
+        return jnp.hstack([d_qdot_d_eps, d_pdot_d_eps, d_qalpha1dot_dtheta, d_palpha1dot_dtheta])
 
-
-class MassRadiusPerturbation_OTF_SecondOrder:
+class MassRadiusPerturbation_OTF_SecondOrder(eqx.Module):
     """
     Applying perturbation theory in the mass and radius of a 
     subhalo potential. 
@@ -270,96 +275,111 @@ class MassRadiusPerturbation_OTF_SecondOrder:
     coords: [ [x,y,z, vx, vy, vz],
        [dx/deps,..., dvx/deps,..., d^2x/dthetadeps, ..., d^2vx/dthetadeps]  ]
     """
+    pertgen: Any
+    potential_base: Any
+    potential_pert: Any
+    acceleration: Any = eqx.field(static=True)
+    dacceleration_dx: Any = eqx.field(static=True)
+    d2acceleration_dx2: Any = eqx.field(static=True)
+    grad_per_SH: Any = eqx.field(static=True)
+    minus_dapert_dx_perSH: Any = eqx.field(static=True)
+
     def __init__(self, perturbation_generator):
         self.pertgen = perturbation_generator
         self.potential_base = perturbation_generator.potential_base
         self.potential_pert = perturbation_generator.potential_perturbation
         
         self.acceleration = jax.jit(self.potential_base.acceleration)
-        self.dacceleration_dx = jax.jit(jax.jacfwd(self.acceleration,argnums=(0,)))
-        self.d2acceleration_dx2 = jax.jit(jax.jacfwd(self.dacceleration_dx,argnums=(0,)))
+        self.dacceleration_dx = jax.jit(jax.jacfwd(self.acceleration, argnums=(0,)))
+        self.d2acceleration_dx2 = jax.jit(jax.jacfwd(self.dacceleration_dx, argnums=(0,)))
         
         self.grad_per_SH = jax.jit(jax.jacfwd(self.potential_pert.potential_per_SH))
         self.minus_dapert_dx_perSH = jax.jit(jax.jacfwd(self.grad_per_SH))
-        
-        
-        
-        
-    @partial(jax.jit, static_argnums=(0,))
-    def term(self,t, coords, args):
+
+    @eqx.filter_jit
+    def term(self, t, coords, args):
         """
         coords[0] contain x0,v0: base position and velocity [length 6]
         coords[1] contain x1, v1, dx1_dtheta, dv1_dtheta: mass / structural perturbations in each coord [nSH x 12]
         coords[2] contain x2, v2: second order mass perturbations in each coord [nSH x 6]
         """
-        
         x0, v0 = coords[0][:3], coords[0][3:]
-        x1, v1 = coords[1][:,:3], coords[1][:,3:6] # nSH x 3
-        dx1_dtheta, dv1_dtheta = coords[1][:,6:9], coords[1][:,9:] # nSH x 3
-        x2, v2 = coords[2][:,:3], coords[2][:,3:] # nSH x 3
+        x1, v1 = coords[1][:, :3], coords[1][:, 3:6] # nSH x 3
+        dx1_dtheta, dv1_dtheta = coords[1][:, 6:9], coords[1][:, 9:] # nSH x 3
+        x2, v2 = coords[2][:, :3], coords[2][:, 3:] # nSH x 3
         
         a0 = self.potential_base.acceleration(x0, t) 
-        a1 = -self.grad_per_SH(x0,t) # nSH x 3
+        a1 = -self.grad_per_SH(x0, t) # nSH x 3
         da_dx = self.dacceleration_dx(x0, t)[0] # 3 x 3
-        d2a_dx2 = self.d2acceleration_dx2(x0,t)[0][0] # 3 x 3 x 3
-        dapert_dx = -self.minus_dapert_dx_perSH(x0,t) # nSH x 3 x 3
+        d2a_dx2 = self.d2acceleration_dx2(x0, t)[0][0] # 3 x 3 x 3
+        dapert_dx = -self.minus_dapert_dx_perSH(x0, t) # nSH x 3 x 3
         
         da = jnp.einsum('ij,nj->ni', da_dx, x1) + a1  # nSH x 3
         
         term1 = jnp.einsum('ij,kj->ki', da_dx, x2) # nSH x 3
         inner_term2 = jnp.einsum('ikj,nk->nij', d2a_dx2, x1) # nSH x 3 x 3
         term2 = jnp.einsum('nj,nij->ni', x1, inner_term2) # nSH x 3
-        d2a = term1 + term2 + jnp.einsum('nij,nj->ni',dapert_dx,x1) # nSH x 3
+        d2a = term1 + term2 + jnp.einsum('nij,nj->ni', dapert_dx, x1) # nSH x 3
+        
         # Now handle radius deviations
-        acceleration1_r = -self.pertgen.gradientPotentialStructural_per_SH(x0,t) # nSH x 3
-        d_palpha1dot_dtheta = acceleration1_r + jnp.einsum('ij,kj->ki',da_dx,dx1_dtheta) # nSH x 3
+        acceleration1_r = -self.pertgen.gradientPotentialStructural_per_SH(x0, t) # nSH x 3
+        d_palpha1dot_dtheta = acceleration1_r + jnp.einsum('ij,kj->ki', da_dx, dx1_dtheta) # nSH x 3
+        
         coord0 = jnp.hstack([v0, a0])
         coord1 = jnp.hstack([v1, da, dv1_dtheta, d_palpha1dot_dtheta])
         coord2 = jnp.hstack([v2, d2a])
         coords_out = [coord0, coord1, coord2]
         return coords_out
 
-
-class MW_LMC_field:
+class MW_LMC_field(eqx.Module):
     # The following field is based entirely on 
     # this script from AGAMA: 
     # https://github.com/GalacticDynamics-Oxford/Agama/blob/c507fc3e703513ae4a41bb705e171a4d036754a8/py/example_lmc_mw_interaction.py
     # Treat the MW and LMC as rigid body potentials.
     # Evolve the centroid of each in response to the other, with Chandrasekhar dynamical friction for the LMC.
     # sigma_func is the velocity dispersion function of the MW at the LMC position [sigma_func(xyz) = scalar].
+    pot_MW: Any
+    pot_LMC: Any
+    sigma_func: Any = eqx.field(static=True)
+    bminCouLog: float = eqx.field(static=True)
+    massLMC: float
+
     def __init__(self, pot_MW=None, pot_LMC=None, sigma_func=None, bminCouLog=None):
         self.pot_MW = pot_MW
         self.pot_LMC = pot_LMC
         self.sigma_func = sigma_func
-        self.bminCouLog = bminCouLog
-        self.massLMC = pot_LMC.mass
+        self.bminCouLog = float(bminCouLog) if bminCouLog is not None else 1.0
+        self.massLMC = float(pot_LMC.mass) if hasattr(pot_LMC, 'mass') else 1.5e11
     
-    @partial(jax.jit, static_argnums=(0,))
+    @eqx.filter_jit
     def term(self, t, coords, args):
         x0, v0 = coords[0][:3], coords[0][3:] # MW position and velocity
         x1, v1 = coords[1][:3], coords[1][3:] # LMC position and velocity
+        
         dx = x1 - x0 # relative position – from MW center
         dv = v1 - v0 # relative velocity - from MW center
-        dist = jnp.sum(dx**2)**0.5
-        vmag = jnp.sum(dv**2)**0.5
-        f0 = self.pot_LMC.acceleration(-dx,t) # force from LMC on MW center
-        f1 = self.pot_MW.acceleration(dx,t) # force from MW on LMC
-        rho = self.pot_MW.density(dx,t) # MW density at LMC position
+        dist = jnp.sqrt(jnp.sum(dx**2))
+        vmag = jnp.sqrt(jnp.sum(dv**2))
+        
+        f0 = self.pot_LMC.acceleration(-dx, t) # force from LMC on MW center
+        f1 = self.pot_MW.acceleration(dx, t) # force from MW on LMC
+        rho = self.pot_MW.density(dx, t) # MW density at LMC position
         sigma = self.sigma_func(dist) # velocity dispersion of MW at LMC position
 
         # distance-dependent Coulomb logarithm
         # (an approximation that best matches the results of N-body simulations)
-        couLog = jnp.maximum(0.0, jnp.log(dist/self.bminCouLog)**0.5)
-        X = vmag / (sigma * 2**0.5)
-        drag  = -(4*jnp.pi * rho * dv / vmag *
-        (jax.lax.erf(X) - 2/jnp.pi**.5 * X * jnp.exp(-X*X)) *
-        self.massLMC * self.pot_MW._G**2 / vmag**2 * couLog)   # dynamical friction force
+        couLog = jnp.maximum(0.0, jnp.sqrt(jnp.log(dist / self.bminCouLog)))
+        X = vmag / (sigma * jnp.sqrt(2.0))
+        
+        drag = -(4 * jnp.pi * rho * dv / vmag *
+                (jax.lax.erf(X) - 2 / jnp.sqrt(jnp.pi) * X * jnp.exp(-X*X)) *
+                self.massLMC * self.pot_MW.units.G**2 / vmag**2 * couLog) # dynamical friction force
         
         force_on_MW = f0
         force_on_LMC = f1 + drag
         return [jnp.hstack([v0, force_on_MW]), jnp.hstack([v1, force_on_LMC])]
 
-class CustomField:
+class CustomField(eqx.Module):
     """
     - Custom field. User must define a function: term(t, coords, args).
     - term(t, coords, args) outputs a pytree of same shape as coords.
@@ -371,8 +391,11 @@ class CustomField:
     output the time derivative of the position and velocity coordinates (i.e., velocity and acceleration).
     ----------------------------------------------------------------
     """
+    _term_func: Any = eqx.field(static=True)
+
     def __init__(self, term=None):
-        self.term = term
-    @partial(jax.jit, static_argnums=(0,))
+        self._term_func = term
+
+    @eqx.filter_jit
     def term(self, t, coords, args):
-        return self.term(t, coords, args)
+        return self._term_func(t, coords, args)

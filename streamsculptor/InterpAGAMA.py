@@ -27,7 +27,7 @@ class AGAMA_Spheroid(Potential):
     rgrid: jnp.ndarray
     spl_pot_func: Any = eqx.field(static=True)#Any
     
-    # --- ADD THIS LINE ---
+
     agama_params: dict = eqx.field(static=True) 
 
     def __init__(self, type='Spheroid', densityNorm=None, scaleRadius=1.0, outerCutoffRadius=100.0, cutoffStrength=2.0, gamma=1.0, beta=3.0, alpha=1.0, rgrid=None, mass=None, units=usys):

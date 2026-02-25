@@ -16,6 +16,7 @@ import diffrax
 import equinox as eqx
 import interpax
 import streamsculptor as ssc
+from jax.scipy.interpolate import RegularGridInterpolator
 
 
 usys = UnitSystem(u.kpc, u.Myr, u.Msun, u.radian)
@@ -508,6 +509,14 @@ def gen_stream_vmapped_Chen25(  pot_base: callable,
     pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = stream_ics
     
     # Interpolate progenitor forward. This is pointless when prog_pot is Null (m=0), but will not break anything. 
+    # prog_spline_ =  jax.jit(RegularGridInterpolator(
+    #          points=(orb_fwd.ts,),
+    #          values=orb_fwd.ys[:,:3],
+    #          method='linear',
+    #          bounds_error=False,
+    #          fill_value=None
+    #          ))
+    #prog_spline = lambda t: prog_spline_(jnp.array([t]))[0]
     prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
     prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
     pot_tot = potential.Potential_Combine(potential_list=[pot_base, prog_pot_translating], units=usys)
@@ -554,6 +563,15 @@ def gen_stream_vmapped_with_pert_Chen25(pot_base=None,
     
     # Interpolate progenitor forward. This is pointless when prog_pot is Null (m=0), but will not break anything. 
     prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
+    # prog_spline =  jax.jit(RegularGridInterpolator(
+    #         points=(orb_fwd.ts,),
+    #         values=orb_fwd.ys[:,:3],
+    #         method='linear',
+    #         bounds_error=False,
+    #         fill_value=None
+    #         ))
+
+
     prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
     pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_pert, prog_pot_translating], units=usys)
     # Integrate progenitor in full potential: base + prog + perturbation
@@ -601,6 +619,13 @@ def gen_stream_vmapped_with_pert_Chen25_fixed_prog(pot_base=None,
     
     # Interpolate progenitor forward. This is pointless when prog_pot is Null (m=0), but will not break anything. 
     prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
+    # prog_spline = jax.jit(RegularGridInterpolator(
+    #         points=(orb_fwd.ts,),
+    #         values=orb_fwd.ys[:,:3],
+    #         method='linear',
+    #         bounds_error=False,
+    #         fill_value=None
+    #         ))
     prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
     pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_pert, prog_pot_translating], units=usys)
     # Integrate progenitor in full potential: base + prog + perturbation

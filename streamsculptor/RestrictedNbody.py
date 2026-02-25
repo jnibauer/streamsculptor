@@ -1,4 +1,4 @@
-import fields
+#import fields
 from functools import partial
 from astropy.constants import G
 import astropy.coordinates as coord

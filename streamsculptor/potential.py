@@ -627,67 +627,211 @@ class MW_LMC_Potential(Potential):
         raise NotImplementedError("Potential not implemented, force is non-conservative")
         
 class AGAMA_MW_LMC_Potential(Potential):
-    LMC_x: Any
-    LMC_y: Any
-    LMC_z: Any
-    velocity_func_x: Any
-    velocity_func_y: Any
-    velocity_func_z: Any
-    pot_MW: Potential_Combine
-    pot_LMC: Any
-    translating_LMC_pot: TimeDepTranslatingPotential
-    unif_acc: UniformAcceleration
-    total_pot: Potential_Combine
+    # --- Static interpolators (identical pattern to working class) ---
+    LMC_x: Any = eqx.field(static=True)
+    LMC_y: Any = eqx.field(static=True)
+    LMC_z: Any = eqx.field(static=True)
+
+    vel_x: Any = eqx.field(static=True)
+    vel_y: Any = eqx.field(static=True)
+    vel_z: Any = eqx.field(static=True)
+
+    # --- Static potentials ---
+    pot_MW: Any = eqx.field(static=True)
+    pot_LMC: Any = eqx.field(static=True)
+    translating_LMC_pot: Any = eqx.field(static=True)
+    unif_acc: Any = eqx.field(static=True)
+    total_pot: Any = eqx.field(static=True)
+
+    # --- Dynamic potential components ---
+    #pot_MW: Potential_Combine
+    #pot_LMC: Any
+    #translating_LMC_pot: TimeDepTranslatingPotential
+    #unif_acc: UniformAcceleration
+    #total_pot: Potential_Combine
 
     def __init__(self, units=usys):
         AGAMA_Spheroid = _require_agama()
         super().__init__(units)
-        
-        data_path_MW = os.path.join(os.path.dirname(__file__), 'data/LMC_MW_potential', 'MW_motion_dict.npy')
-        data_path_LMC = os.path.join(os.path.dirname(__file__), 'data/LMC_MW_potential', 'LMC_motion_dict.npy')
+
+        # ------------------------------------------------------------------
+        # 1. Load trajectory data
+        # ------------------------------------------------------------------
+        data_path_MW = os.path.join(
+            os.path.dirname(__file__),
+            "data/LMC_MW_potential",
+            "MW_motion_dict.npy",
+        )
+        data_path_LMC = os.path.join(
+            os.path.dirname(__file__),
+            "data/LMC_MW_potential",
+            "LMC_motion_dict.npy",
+        )
+
         MW_motion_dict = jnp.load(data_path_MW, allow_pickle=True).item()
         LMC_motion_dict = jnp.load(data_path_LMC, allow_pickle=True).item()
-        
-        self.LMC_x = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,0], method='cubic2')
-        self.LMC_y = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,1], method='cubic2')
-        self.LMC_z = interpax.Interpolator1D(x=LMC_motion_dict['flip_tsave'], f=LMC_motion_dict['flip_trajLMC'][:,2], method='cubic2')
 
-        self.velocity_func_x = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,3], method='cubic2')
-        self.velocity_func_y = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,4], method='cubic2')
-        self.velocity_func_z = interpax.Interpolator1D(x=MW_motion_dict['flip_tsave'], f=MW_motion_dict['flip_traj'][:,5], method='cubic2')
+        flip_tsave = LMC_motion_dict["flip_tsave"]
+        flip_trajLMC = LMC_motion_dict["flip_trajLMC"]
+        flip_traj_MW = MW_motion_dict["flip_traj"]
 
-        paramBulge = dict(type='Spheroid', mass=1.2e10, scaleRadius=0.2, outerCutoffRadius=1.8, gamma=0.0, beta=1.8)
-        paramDisk = dict(type='MiyamotoNagai', mass=5.0e10, scaleRadius=3.0, scaleHeight=0.3)
-        paramHalo = dict(type='Spheroid', densityNorm=1.35e7, scaleRadius=14, outerCutoffRadius=300, cutoffStrength=4, gamma=1, beta=3)
+        # ------------------------------------------------------------------
+        # 2. Build cubic interpolators (STATIC)
+        # ------------------------------------------------------------------
+        self.LMC_x = interpax.Interpolator1D(
+            x=flip_tsave,
+            f=flip_trajLMC[:, 0],
+            method="cubic2",
+        )
+        self.LMC_y = interpax.Interpolator1D(
+            x=flip_tsave,
+            f=flip_trajLMC[:, 1],
+            method="cubic2",
+        )
+        self.LMC_z = interpax.Interpolator1D(
+            x=flip_tsave,
+            f=flip_trajLMC[:, 2],
+            method="cubic2",
+        )
+
+        self.vel_x = interpax.Interpolator1D(
+            x=flip_tsave,
+            f=flip_traj_MW[:, 3],
+            method="cubic2",
+        )
+        self.vel_y = interpax.Interpolator1D(
+            x=flip_tsave,
+            f=flip_traj_MW[:, 4],
+            method="cubic2",
+        )
+        self.vel_z = interpax.Interpolator1D(
+            x=flip_tsave,
+            f=flip_traj_MW[:, 5],
+            method="cubic2",
+        )
+
+        # ------------------------------------------------------------------
+        # 3. Pure time-dependent functions (NO JIT, NO self capture)
+        # ------------------------------------------------------------------
+        LMC_x_local, LMC_y_local, LMC_z_local = (
+            self.LMC_x,
+            self.LMC_y,
+            self.LMC_z,
+        )
+        vel_x_local, vel_y_local, vel_z_local = (
+            self.vel_x,
+            self.vel_y,
+            self.vel_z,
+        )
+
+        def lmc_center_fn(t):
+            return jnp.array([
+                LMC_x_local(t),
+                LMC_y_local(t),
+                LMC_z_local(t),
+            ])
+
+        def mw_velocity_fn(t):
+            return jnp.array([
+                vel_x_local(t),
+                vel_y_local(t),
+                vel_z_local(t),
+            ])
+
+        # ------------------------------------------------------------------
+        # 4. AGAMA + analytic MW components
+        # ------------------------------------------------------------------
+        paramBulge = dict(
+            type="Spheroid",
+            mass=1.2e10,
+            scaleRadius=0.2,
+            outerCutoffRadius=1.8,
+            gamma=0.0,
+            beta=1.8,
+        )
+
+        paramHalo = dict(
+            type="Spheroid",
+            densityNorm=1.35e7,
+            scaleRadius=14,
+            outerCutoffRadius=300,
+            cutoffStrength=4,
+            gamma=1,
+            beta=3,
+        )
+
+        paramDisk = dict(
+            type="MiyamotoNagai",
+            mass=5.0e10,
+            scaleRadius=3.0,
+            scaleHeight=0.3,
+        )
 
         massLMC = 1.5e11
-        radiusLMC = (massLMC/1e11)**0.6 * 8.5
-        paramLMC = dict(type='spheroid', mass=massLMC, scaleRadius=radiusLMC, outerCutoffRadius=radiusLMC*10, gamma=1, beta=3)
-            
+        radiusLMC = (massLMC / 1e11) ** 0.6 * 8.5
+
+        paramLMC = dict(
+            type="spheroid",
+            mass=massLMC,
+            scaleRadius=radiusLMC,
+            outerCutoffRadius=radiusLMC * 10,
+            gamma=1,
+            beta=3,
+        )
+
         pot_bulge = AGAMA_Spheroid(**paramBulge)
-        pot_disk = MiyamotoNagaiDisk(m=paramDisk['mass'], a=paramDisk['scaleRadius'], b=paramDisk['scaleHeight'], units=units)
+        pot_disk = MiyamotoNagaiDisk(
+            m=paramDisk["mass"],
+            a=paramDisk["scaleRadius"],
+            b=paramDisk["scaleHeight"],
+            units=units,
+        )
         pot_halo = AGAMA_Spheroid(**paramHalo)
-        self.pot_MW = Potential_Combine([pot_bulge, pot_disk, pot_halo], units=units)
-        
+
+        self.pot_MW = Potential_Combine(
+            [pot_bulge, pot_disk, pot_halo],
+            units=units,
+        )
+
         self.pot_LMC = AGAMA_Spheroid(**paramLMC)
-        self.translating_LMC_pot = TimeDepTranslatingPotential(pot=self.pot_LMC, center_spl=self.LMC_center_spline, units=units)
-        self.unif_acc = UniformAcceleration(velocity_func=self.MW_velocity_func, units=units)
-        self.total_pot = Potential_Combine([self.pot_MW, self.translating_LMC_pot, self.unif_acc], units=units)
 
-    def LMC_center_spline(self, t):
-        return jnp.array([self.LMC_x(t), self.LMC_y(t), self.LMC_z(t)])
-        
-    def MW_velocity_func(self, t):
-        return jnp.array([self.velocity_func_x(t), self.velocity_func_y(t), self.velocity_func_z(t)])
+        # ------------------------------------------------------------------
+        # 5. Time-dependent + non-inertial pieces
+        # ------------------------------------------------------------------
+        self.translating_LMC_pot = TimeDepTranslatingPotential(
+            pot=self.pot_LMC,
+            center_spl=lmc_center_fn,
+            units=units,
+        )
 
+        self.unif_acc = UniformAcceleration(
+            velocity_func=mw_velocity_fn,
+            units=units,
+        )
+
+        # ------------------------------------------------------------------
+        # 6. Final combined potential
+        # ------------------------------------------------------------------
+        self.total_pot = Potential_Combine(
+            [self.pot_MW, self.translating_LMC_pot, self.unif_acc],
+            units=units,
+        )
+
+    # ----------------------------------------------------------------------
+    # Public API
+    # ----------------------------------------------------------------------
+    @eqx.filter_jit
     def gradient(self, xyz, t):
         return self.total_pot.gradient(xyz, t)
     
+    @eqx.filter_jit
     def acceleration(self, xyz, t):
         return self.total_pot.acceleration(xyz, t)
 
     def potential(self, xyz, t):
-        raise NotImplementedError("Potential not implemented, force is non-conservative")
+        raise NotImplementedError(
+            "Potential not implemented; force is non-conservative."
+        )
 
 # =============================================================================
 # Subhalo Potentials

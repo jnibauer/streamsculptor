@@ -25,7 +25,7 @@ class AGAMA_Spheroid(Potential):
     alpha: float
     mass: float
     rgrid: jnp.ndarray
-    spl_pot_func: Any
+    spl_pot_func: Any = eqx.field(static=True)#Any
     
     # --- ADD THIS LINE ---
     agama_params: dict = eqx.field(static=True) 

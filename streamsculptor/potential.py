@@ -586,11 +586,11 @@ class MW_LMC_Potential(Potential):
         vel_x_local, vel_y_local, vel_z_local = self.vel_x, self.vel_y, self.vel_z
 
         # these functions are pure wrt time and return jnp arrays (and are JIT-able)
-        @jax.jit
+        #@jax.jit
         def lmc_center_fn(t):
             return jnp.array([LMC_x_local(t), LMC_y_local(t), LMC_z_local(t)])
 
-        @jax.jit
+        #@jax.jit
         def mw_velocity_fn(t):
             return jnp.array([vel_x_local(t), vel_y_local(t), vel_z_local(t)])
 
@@ -607,19 +607,19 @@ class MW_LMC_Potential(Potential):
         )
 
     # JIT-able accessors that return jnp arrays (for diagnostics / external use)
-    @eqx.filter_jit
+    #@eqx.filter_jit
     def LMC_center_spline(self, t):
         return jnp.array([self.LMC_x(t), self.LMC_y(t), self.LMC_z(t)])
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
     def MW_velocity_func(self, t):
         return jnp.array([self.vel_x(t), self.vel_y(t), self.vel_z(t)])
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
     def gradient(self, xyz, t):
         return self.total_pot.gradient(xyz, t)
 
-    @eqx.filter_jit
+    #@eqx.filter_jit
     def acceleration(self, xyz, t):
         return self.total_pot.acceleration(xyz, t)
 

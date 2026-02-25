@@ -115,7 +115,7 @@ class RestrictedNbody_generator(eqx.Module):
 @eqx.filter_jit
 def integrate_restricted_Nbody(w0, ts, interrupt_ts, field, solver=diffrax.Dopri8(scan_kind='bounded'), 
                                rtol=1e-7, atol=1e-7, dtmin=0.01, dtmax=None, max_steps=5000, 
-                               mass_init=1e5, r_s_init=1.0):
+                               mass_init=1e5, r_s_init=1.0, save_full_traj=False):
     
     # Calculate mass per particle ONCE at the start
     N_total = w0.shape[0]
@@ -123,7 +123,9 @@ def integrate_restricted_Nbody(w0, ts, interrupt_ts, field, solver=diffrax.Dopri
     
     def body_func(carry, idx):
         wcurr, tcurr, next_idx, param_mass, param_rs = carry
-        t_stop = interrupt_ts[next_idx]
+        # Clip t_tstop between -inf and the end of the main integration interval to ensure we don't overshoot
+        t_stop = jnp.clip(interrupt_ts[next_idx], -jnp.inf, ts[-1])
+        
         
         # Evaluate current state to get new parameters based on energy
         curr_state = RestrictedNbody_generator(
@@ -155,14 +157,26 @@ def integrate_restricted_Nbody(w0, ts, interrupt_ts, field, solver=diffrax.Dopri
         
         w_next = sol.ys[-1]
         new_carry = [w_next, t_stop, next_idx + 1, new_mass, new_rs]
-        return new_carry, [t_stop, new_mass, new_rs, w_next]
+
+        if save_full_traj:
+            # If we want to save the full trajectory, we can concatenate the results
+            # This will create a large array, so be cautious with memory usage
+            saved_state = [t_stop, new_mass, new_rs, w_next]
+
+        else:
+            saved_state = [t_stop, new_mass, new_rs]
+        return new_carry, saved_state
+
+
+        #return new_carry, [t_stop, new_mass, new_rs, w_next]
 
     # Process interrupt schedule
     init_carry = [w0, ts[0], 0, mass_init, r_s_init]
     ids = jnp.arange(len(interrupt_ts))
     
-    _, all_states = jax.lax.scan(body_func, init_carry, ids)
-    return all_states
+    final_carry, all_states = jax.lax.scan(body_func, init_carry, ids)
+    w_final = final_carry[0]
+    return w_final, all_states
 
 
 # class RestrictedNbody_generator(eqx.Module):

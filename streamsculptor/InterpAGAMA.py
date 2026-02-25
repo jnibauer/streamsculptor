@@ -25,7 +25,7 @@ class AGAMA_Spheroid(Potential):
     alpha: float
     mass: float
     rgrid: jnp.ndarray
-    spl_pot_func: Any = eqx.field(static=True)#Any
+    spl_pot_func: Any 
     
 
     agama_params: dict = eqx.field(static=True) 
@@ -107,3 +107,4 @@ class AGAMA_Spheroid(Potential):
         r = jnp.sqrt(jnp.sum(xyz**2))
         r_over_rs = r / self.scaleRadius
         return self.densityNorm * (r_over_rs**(-self.gamma)) * (1 + r_over_rs**self.alpha)**((self.gamma - self.beta) / self.alpha) * jnp.exp(-(r / self.outerCutoffRadius)**self.cutoffStrength)
+ 

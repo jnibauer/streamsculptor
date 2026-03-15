@@ -533,13 +533,13 @@ class MW_LMC_Potential(Potential):
     and JAX-friendly.
     """
     # static interpolator objects (Equinox should not try to differentiate through them)
-    LMC_x: Any = eqx.field(static=True)
-    LMC_y: Any = eqx.field(static=True)
-    LMC_z: Any = eqx.field(static=True)
+    LMC_x: Any #= eqx.field(static=True)
+    LMC_y: Any #= eqx.field(static=True)
+    LMC_z: Any #= eqx.field(static=True)
 
-    vel_x: Any = eqx.field(static=True)
-    vel_y: Any = eqx.field(static=True)
-    vel_z: Any = eqx.field(static=True)
+    vel_x: Any #= eqx.field(static=True)
+    vel_y: Any #= eqx.field(static=True)
+    vel_z: Any #= eqx.field(static=True)
 
     pot_MW: Potential_Combine
     pot_LMC: NFWPotential

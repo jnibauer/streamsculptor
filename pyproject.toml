@@ -29,6 +29,9 @@ dependencies = [
 [project.optional-dependencies]
 jax = ["jax>=0.4"]
 agama = ["agama>=1.0"]
+bfeax = ["bfeax @ git+https://github.com/jnibauer/bfeax.git"]     
+
+# Can install with e.g., pip install "streamsculptor[bfeax]"    
 
 [tool.setuptools]
 packages = { find = {} }

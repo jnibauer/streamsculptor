@@ -562,13 +562,13 @@ class MW_LMC_Potential(Potential):
         flip_traj_MW = MW_motion_dict['flip_traj']   # shape (nt, 6)
 
         # 2. Make per-component cubic interpolators (Interpax is JAX-friendly)
-        self.LMC_x = interpax.Interpolator1D(x=flip_tsave, f=flip_trajLMC[:, 0], method='cubic2')
-        self.LMC_y = interpax.Interpolator1D(x=flip_tsave, f=flip_trajLMC[:, 1], method='cubic2')
-        self.LMC_z = interpax.Interpolator1D(x=flip_tsave, f=flip_trajLMC[:, 2], method='cubic2')
+        self.LMC_x = interpax.Interpolator1D(x=flip_tsave, f=flip_trajLMC[:, 0], method='cubic')
+        self.LMC_y = interpax.Interpolator1D(x=flip_tsave, f=flip_trajLMC[:, 1], method='cubic')
+        self.LMC_z = interpax.Interpolator1D(x=flip_tsave, f=flip_trajLMC[:, 2], method='cubic')
 
-        self.vel_x = interpax.Interpolator1D(x=flip_tsave, f=flip_traj_MW[:, 3], method='cubic2')
-        self.vel_y = interpax.Interpolator1D(x=flip_tsave, f=flip_traj_MW[:, 4], method='cubic2')
-        self.vel_z = interpax.Interpolator1D(x=flip_tsave, f=flip_traj_MW[:, 5], method='cubic2')
+        self.vel_x = interpax.Interpolator1D(x=flip_tsave, f=flip_traj_MW[:, 3], method='cubic')
+        self.vel_y = interpax.Interpolator1D(x=flip_tsave, f=flip_traj_MW[:, 4], method='cubic')
+        self.vel_z = interpax.Interpolator1D(x=flip_tsave, f=flip_traj_MW[:, 5], method='cubic')
 
         # 3. Component Potentials
         pot_bulge = HernquistPotential(m=5e9, r_s=1.0, units=units)

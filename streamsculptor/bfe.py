@@ -118,6 +118,25 @@ class BFEPotential(Potential):
         """
         return self.units.G * self._exp(xyz[0], xyz[1], xyz[2])
 
+    def gradient(self,xyz,t):
+        """
+        Evaluate the gradient of the potential at xyz.
+
+        Parameters
+        ----------
+        xyz : jnp.ndarray, shape (3,)
+            Position vector [x, y, z] in kpc.
+        t : float
+            Time in Myr (unused -- expansion is static).
+
+        Returns
+        -------
+        jnp.ndarray, shape (3,)
+            Gradient of the potential at xyz, in (kpc/Myr)^2 / kpc.
+        """
+        return -self.units.G * jnp.hstack(self._exp.force(xyz[0], xyz[1], xyz[2]))
+        
+
     # gradient(xyz, t)     = jax.grad(self.potential)(xyz, t)   [inherited]
     # acceleration(xyz, t) = -gradient(xyz, t)                   [inherited]
     # density(xyz, t)      = Laplacian(potential) / (4 pi G)     [inherited]

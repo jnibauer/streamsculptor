@@ -142,12 +142,10 @@ class TNFWPotential(Potential):
         return jnp.log(x * (tau + jnp.sqrt(tau**2 + x**2)) ** -1)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _potential(self, xyz, t):
+    def _potential(self, x, tau):
         """
         Compute the complicated part of the potential
         """
-        x = jnp.sqrt(xyz[0] ** 2 + xyz[1] ** 2 + xyz[2] ** 2) / self.r_s
-        tau = x * self.r_s / self.r_t
         u = x ** 2
         t2 = tau ** 2
         Lx = self._L(x, tau)

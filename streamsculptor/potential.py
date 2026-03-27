@@ -96,6 +96,83 @@ class TriaxialNFWPotential(Potential):
         m = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 )/self.r_s ##removed softening! used to be .001 after xyz[2]**2
         return v_h2*jnp.log(1.0+ m) / m
 
+class TNFWPotential(Potential):
+    """
+    tidally evolved NFW profile:
+    rho(r) = f_t * rho_NFW(r) * (rt^2 / rt^2 +r^2)
+    where f_t and r_t are two additional parameters that rescale and truncate the profile, respectively
+    """
+    def __init__(self, rhos, rs, ft, rt, units=None):
+        super().__init__(units, {'rhos': rhos, 'r_s': rs, 'f_t': ft, 'r_t': rt})
+
+    @partial(jax.jit, static_argnums=(0,))
+    def potential(self, xyz, t):
+        """
+        Compute the gravitational potential using Equation A14 from Baltz et al. (2009)
+        https://arxiv.org/pdf/0705.0682
+        """
+        G_over_c2 = 4.786 * 10 ** -17 # kpc / M_sun
+        M0 = 4*jnp.pi*self.rhos*self.r_s**3
+        R = jnp.sqrt(xyz[0] ** 2 + xyz[1] ** 2 + xyz[2] ** 2)
+        x = R / self.r_s
+        tau = self.r_t / self.r_s
+        pot = self._potential(x, tau)
+        prefactor = 2 * M0 * G_over_c2 * self.f_t
+        return prefactor * pot
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _F(self, x):
+        """
+        Auxiliary function #1
+        """
+        if x == 1:
+            return 1
+        elif x == 0:
+            return 0
+        elif x < 1:
+            return (1 - x**2) ** -0.5 * jnp.arctanh((1 - x**2) ** 0.5)
+        else:
+            return (x**2 - 1) ** -0.5 * jnp.arctan((x**2 - 1) ** 0.5)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _L(self, x, tau):
+        """
+        Auxiliary function #3
+        """
+        return jnp.log(x * (tau + jnp.sqrt(tau**2 + x**2)) ** -1)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _potential(self, xyz, t):
+        """
+        Compute the complicated part of the potential
+        """
+        x = jnp.sqrt(xyz[0] ** 2 + xyz[1] ** 2 + xyz[2] ** 2) / self.r_s
+        tau = x * self.r_s / self.r_t
+        u = x ** 2
+        t2 = tau ** 2
+        Lx = self._L(x, tau)
+        Fx = self._F(x)
+        if x < 1:
+            cos_func = -jnp.arccosh(1 / x) ** 2
+        else:
+            cos_func = jnp.arccos(1 / x) ** 2
+        return (t2 + 1) ** -2 * (
+                2
+                * t2
+                * jnp.pi
+                * (tau - (t2 + u) ** 0.5 + tau * jnp.log(tau + (t2 + u) ** 0.5))
+                + 2 * (t2 - 1) * tau * (t2 + u) ** 0.5 * Lx
+                + t2 * (t2 - 1) * Lx ** 2
+                + 4 * t2 * (u - 1) * Fx
+                + t2 * (t2 - 1) * cos_func
+                + t2 * ((t2 - 1) * jnp.log(tau) - t2 - 1) * jnp.log(u)
+                - t2
+                * (
+                        (t2 - 1) * jnp.log(tau) * jnp.log(4 * tau)
+                        + 2 * jnp.log(0.5 * tau)
+                        - 2 * tau * (tau - jnp.pi) * jnp.log(tau * 2)
+                )
+        )
 
 class Isochrone(Potential):
     

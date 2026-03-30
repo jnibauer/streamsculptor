@@ -22,7 +22,7 @@ class ImpactGenerator(eqx.Module):
     sigma: float = eqx.field(static=True)
     phi1_exclude: jnp.ndarray
     stream_length: float
-    seednum: int = eqx.field(static=True)
+    seednum: int # don't make this static so that it can be changed without re-initializing the whole class and re-compiling the jitted functions
     
     # Internal arrays created during init
     keys: jnp.ndarray
@@ -61,7 +61,7 @@ class ImpactGenerator(eqx.Module):
         self.phi1window = float(phi1window)
         self.NumImpacts = int(NumImpacts)
         self.sigma = float(sigma)
-        self.seednum = int(seednum)
+        self.seednum = seednum
 
         # Convert bounds to JAX arrays
         self.bImpact_bounds = jnp.asarray(bImpact_bounds)

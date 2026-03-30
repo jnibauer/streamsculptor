@@ -83,8 +83,8 @@ class ImpactGenerator(eqx.Module):
             self.b_low = jnp.ones(self.NumImpacts) * self.bImpact_bounds[0]
             self.b_high = jnp.ones(self.NumImpacts) * self.bImpact_bounds[1]
         else:
-            self.b_low = self.bImpact_bounds[:, 0]
-            self.b_high = self.bImpact_bounds[:, 1]
+            self.b_low = self.bImpact_bounds[0]
+            self.b_high = self.bImpact_bounds[1]
 
         if stream_length is None:
             self.stream_length = compute_stream_length(stream=self.stream, phi1=self.stream_phi1)

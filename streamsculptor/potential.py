@@ -96,81 +96,20 @@ class TriaxialNFWPotential(Potential):
         m = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2 )/self.r_s ##removed softening! used to be .001 after xyz[2]**2
         return v_h2*jnp.log(1.0+ m) / m
 
-class TNFWPotential(Potential):
+################## methods for computing the density profile of tidally-evolved subhalos ######################
+def ft_Du2024(fb, alpha=1.0, beta=3.0, gamma=1.0, delta=2.0):
     """
-    tidally evolved NFW profile:
-    rho(r) = f_t * rho_NFW(r) * (rt^2 / rt^2 +r^2)
-    where f_t and r_t are two additional parameters that rescale and truncate the profile, respectively
+    Calculate the rescaling factor for a TNFW profile based on Du2024
     """
-    def __init__(self, rhos, rs, ft, rt, units=None):
-        super().__init__(units, {'rhos': rhos, 'r_s': rs, 'f_t': ft, 'r_t': rt})
+    D, E = 0.75826635, 0.23376409  # NFW default (alpha=1, beta=3, gamma=1, delta=2)
+    return jnp.minimum((1 + D) * fb**E / (1 + D * fb**(2*E)), 1.0)
 
-    @partial(jax.jit, static_argnums=(0,))
-    def potential(self, xyz, t):
-        """
-        Compute the gravitational potential using Equation A14 from Baltz et al. (2009)
-        https://arxiv.org/pdf/0705.0682
-        """
-        G_over_c2 = 4.786 * 10 ** -17 # kpc / M_sun
-        M0 = 4*jnp.pi*self.rhos*self.r_s**3
-        R = jnp.sqrt(xyz[0] ** 2 + xyz[1] ** 2 + xyz[2] ** 2)
-        x = R / self.r_s
-        tau = self.r_t / self.r_s
-        pot = self._potential(x, tau)
-        prefactor = 2 * M0 * G_over_c2 * self.f_t
-        return prefactor * pot
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _F(self, x):
-        """
-        Auxiliary function #1
-        """
-        if x == 1:
-            return 1
-        elif x == 0:
-            return 0
-        elif x < 1:
-            return (1 - x**2) ** -0.5 * jnp.arctanh((1 - x**2) ** 0.5)
-        else:
-            return (x**2 - 1) ** -0.5 * jnp.arctan((x**2 - 1) ** 0.5)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _L(self, x, tau):
-        """
-        Auxiliary function #3
-        """
-        return jnp.log(x * (tau + jnp.sqrt(tau**2 + x**2)) ** -1)
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _potential(self, x, tau):
-        """
-        Compute the complicated part of the potential
-        """
-        u = x ** 2
-        t2 = tau ** 2
-        Lx = self._L(x, tau)
-        Fx = self._F(x)
-        if x < 1:
-            cos_func = -jnp.arccosh(1 / x) ** 2
-        else:
-            cos_func = jnp.arccos(1 / x) ** 2
-        return (t2 + 1) ** -2 * (
-                2
-                * t2
-                * jnp.pi
-                * (tau - (t2 + u) ** 0.5 + tau * jnp.log(tau + (t2 + u) ** 0.5))
-                + 2 * (t2 - 1) * tau * (t2 + u) ** 0.5 * Lx
-                + t2 * (t2 - 1) * Lx ** 2
-                + 4 * t2 * (u - 1) * Fx
-                + t2 * (t2 - 1) * cos_func
-                + t2 * ((t2 - 1) * jnp.log(tau) - t2 - 1) * jnp.log(u)
-                - t2
-                * (
-                        (t2 - 1) * jnp.log(tau) * jnp.log(4 * tau)
-                        + 2 * jnp.log(0.5 * tau)
-                        - 2 * tau * (tau - jnp.pi) * jnp.log(tau * 2)
-                )
-        )
+def r_te_Du2024(fb, alpha=1.0, beta=3.0, gamma=1.0, delta=2.0):
+    """
+    Calculate the truncation radius for a TNFW profile based on Du2024
+    """
+    A, B, C = 0.68492777, 0.66438857, 2.07766512  # NFW default
+    return (1 + A) * fb**B / (1 + A * fb**(2*B)) / jnp.exp(C * (1 - fb))
 
 class Isochrone(Potential):
     
@@ -1015,6 +954,138 @@ class SubhaloLinePotential_Custom(Potential):
         vmapped_cond = jax.vmap(jax.lax.cond,in_axes=((0,None,None,0,0,0,None)))
         pot_per_subhalo = vmapped_cond(pred,true_func,false_func, self.subhalo_x0, self.subhalo_v, self.subhalo_t0, t)#jax.lax.cond(pred, true_func, false_func)
         return pot_per_subhalo
+
+def tnfw_enclosed_mass(R, rhos, rs, ft, rt):
+    tau = rt / rs
+    u = R / rs
+    t2 = tau**2
+
+    term1 = (t2 - 1) / (t2 + 1)**2 * jnp.log(1 + u)
+    term2 = 1 / (t2 + 1) * (1/(1 + u) - 1)
+    term3 = -(t2 - 1) / (2*(t2 + 1)**2) * jnp.log(1 + u**2/t2)
+    term4 = 2*tau / (t2 + 1)**2 * jnp.arctan(u / tau)
+    return 4 * jnp.pi * rhos * ft * rs**3 * t2 * (term1 + term2 + term3 + term4)
+
+def nfw_params_from_infall(m_infall, c_infall, z_infall,
+                           H0=67.4, Omega_m=0.315, Omega_L=0.685):
+    """
+    compute rhos, rs from infall params
+    Defaults to Planck 2018 cosmology
+    """
+    G = 4.498e-12  # kpc^3 / (Msun * Myr^2)
+    H0_myr = H0 * 1e3 / 3.0856e22 * 3.15576e13  # km/s/Mpc -> Myr^-1
+    Ez = jnp.sqrt(Omega_m * (1 + z_infall) ** 3 + Omega_L)
+    H_z_myr = H0_myr * Ez
+    rho_crit = 3 * H_z_myr ** 2 / (8 * jnp.pi * G)
+    R200 = (3 * m_infall / (4 * jnp.pi * 200 * rho_crit)) ** (1 / 3)
+    rs = R200 / c_infall
+    rhos = m_infall / (4 * jnp.pi * rs ** 3 * (jnp.log(1 + c_infall) - c_infall / (1 + c_infall)))
+    return rhos, rs, R200
+
+def tidally_evolved_nfw_params_from_infall(m_infall, c_infall, z_infall, f_bound):
+    """
+    Compute the density profile a tidally evolved (along tidal tracks) TNFW profile, given infall properties and
+    bound mass fraction
+    """
+    rhos, rs, r200 = nfw_params_from_infall(m_infall, c_infall, z_infall)
+    # Du et al. (2024) tidal track parameters, NFW (alpha=1, beta=3, gamma=1, delta=2)
+    A, B, C = 0.68492777, 0.66438857, 2.07766512
+    D, E = 0.75826635, 0.23376409
+    ft = jnp.minimum((1 + D) * f_bound ** E / (1 + D * f_bound ** (2 * E)), 1.0)
+    rt = (1 + A) * f_bound ** B / (1 + A * f_bound ** (2 * B)) / jnp.exp(C * (1 - f_bound)) * r200
+    return rhos, rs, ft, rt
+
+def make_tnfw_potential_from_infall(m_infall, c_infall, z_infall, f_bound, units=None):
+    """
+    Create a TNFW potential from infall properties
+    """
+    rhos, rs, ft, rt = tidally_evolved_nfw_params_from_infall(m_infall, c_infall, z_infall, f_bound)
+    return make_tnfw_potential_from_density_profile(rhos, rs, ft, rt, units=units)
+
+def make_tnfw_potential_from_density_profile(rhos, rs, ft, rt, n_grid=256, units=None):
+    """
+    Like get_potential_from_density but for a TNFW profile given
+    rhos, rs, ft, rt directly. Returns the object with r_grid and phi_grid
+    accessible for precomputation.
+    """
+    def tnfw_density(r):
+        x = r / rs
+        return rhos * ft / (x * (1 + x)**2 * (1 + (r / rt)**2))
+
+    r_grid = jnp.logspace(jnp.log10(1e-4 * rs), jnp.log10(1e3 * rs), n_grid)
+    return get_potential_from_density(density_func=tnfw_density, r_grid=r_grid, units=units)
+
+class TNFWSubhaloLinePotential(Potential):
+    def __init__(self, m_infall, c_infall, z_infall, f_bound,
+                 subhalo_x0, subhalo_v, subhalo_t0, t_window, units=None):
+        """
+        Initialize TNFW subhalo potentials from infall mass, concentration, infall redshift, and bound mass fraction
+        The bound mass fraction is definied as the bound subhalo mass when it hits the stream
+        Mass definition is m200 with respect to rho_crit(z_infall)
+        """
+
+        # calculate density profile parameters
+        rhos, rs, ft, rt = tidally_evolved_nfw_params_from_infall(m_infall, c_infall, z_infall, f_bound)
+        # precompute potential grids for each subhalo at init time
+        n_subhalos = len(m_infall)
+        n_grid = 256
+        log_r_grids = jnp.zeros((n_subhalos, n_grid))
+        phi_grids = jnp.zeros((n_subhalos, n_grid))
+        for i in range(n_subhalos):
+            pot_i = make_tnfw_potential_from_density_profile(
+                rhos[i], rs[i], ft[i], rt[i], n_grid=n_grid, units=units
+            )
+            log_r_grids = log_r_grids.at[i].set(jnp.log(pot_i.r_grid))
+            phi_grids = phi_grids.at[i].set(pot_i.phi_grid)
+
+        super().__init__(units, {
+            'subhalo_x0': subhalo_x0, 'subhalo_v': subhalo_v,
+            'subhalo_t0': subhalo_t0, 't_window': t_window,
+            'log_r_grids': log_r_grids, 'phi_grids': phi_grids,
+        })
+
+    @partial(jax.jit, static_argnums=(0,))
+    def single_subhalo_potential(self, xyz, log_r_grid, phi_grid, t):
+        r = jnp.sqrt(jnp.sum(xyz**2))
+        func = interpax.Interpolator1D(x=log_r_grid, f=phi_grid, method='cubic')
+        return func(jnp.log(r))
+
+    @partial(jax.jit, static_argnums=(0,))
+    def potential(self, xyz, t):
+        def true_func(subhalo_x0, subhalo_v, subhalo_t0, log_r_grid, phi_grid, t):
+            relative_position = xyz - (subhalo_x0 + subhalo_v * (t - subhalo_t0))
+            return self.single_subhalo_potential(relative_position, log_r_grid, phi_grid, t)
+
+        def false_func(subhalo_x0, subhalo_v, subhalo_t0, log_r_grid, phi_grid, t):
+            return jnp.array(0.0)
+
+        pred = jnp.abs(t - self.subhalo_t0) < self.t_window
+
+        vmapped_cond = jax.vmap(jax.lax.cond, in_axes=(0, None, None, 0, 0, 0, 0, 0, None))
+        pot_per_subhalo = vmapped_cond(
+            pred, true_func, false_func,
+            self.subhalo_x0, self.subhalo_v, self.subhalo_t0,
+            self.log_r_grids, self.phi_grids, t
+        )
+        return jnp.sum(pot_per_subhalo)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def potential_per_SH(self, xyz, t):
+        def true_func(subhalo_x0, subhalo_v, subhalo_t0, log_r_grid, phi_grid, t):
+            relative_position = xyz - (subhalo_x0 + subhalo_v * (t - subhalo_t0))
+            return self.single_subhalo_potential(relative_position, log_r_grid, phi_grid, t)
+
+        def false_func(subhalo_x0, subhalo_v, subhalo_t0, log_r_grid, phi_grid, t):
+            return jnp.array(0.0)
+
+        pred = jnp.abs(t - self.subhalo_t0) < self.t_window
+
+        vmapped_cond = jax.vmap(jax.lax.cond, in_axes=(0, None, None, 0, 0, 0, 0, 0, None))
+        return vmapped_cond(
+            pred, true_func, false_func,
+            self.subhalo_x0, self.subhalo_v, self.subhalo_t0,
+            self.log_r_grids, self.phi_grids, t
+        )
 
 class SubhaloLinePotential_dRadius_Custom(Potential):
     def __init__(self, dpot_dRadius, subhalo_x0, subhalo_v, subhalo_t0, t_window, units=None):

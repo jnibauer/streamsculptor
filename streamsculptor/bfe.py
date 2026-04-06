@@ -89,8 +89,9 @@ class BFEPotential(Potential):
         Defaults to the streamsculptor default unit system (usys).
     """
 
-    # MultipoleExpansion is not a JAX array, so it must be a static field.
-    _exp: MultipoleExpansion = eqx.field(static=True)
+    # MultipoleExpansion is registered as a JAX pytree (see bfeax/potential.py),
+    # so it can be a dynamic field — its internal spline arrays are proper leaves.
+    _exp: MultipoleExpansion
 
     def __init__(self, expansion: MultipoleExpansion, units=usys):
         super().__init__(units)
@@ -156,6 +157,7 @@ class BFEPotential(Potential):
         n_theta: int | None = None,
         n_phi: int | None = None,
         symmetry: str | None = None,
+        prune_modes: bool = False,
         units=usys,
     ) -> "BFEAxPotential":
         """
@@ -178,7 +180,7 @@ class BFEPotential(Potential):
         """
         exp = MultipoleExpansion.from_density(
             rho, r_min=r_min, r_max=r_max, n_r=n_r, l_max=l_max,
-            n_theta=n_theta, n_phi=n_phi, symmetry=symmetry,
+            n_theta=n_theta, n_phi=n_phi, symmetry=symmetry, prune_modes=prune_modes
         )
         return cls(exp, units=units)
 

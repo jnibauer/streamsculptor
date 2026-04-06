@@ -955,6 +955,7 @@ class SubhaloLinePotential_Custom(Potential):
         pot_per_subhalo = vmapped_cond(pred,true_func,false_func, self.subhalo_x0, self.subhalo_v, self.subhalo_t0, t)#jax.lax.cond(pred, true_func, false_func)
         return pot_per_subhalo
 
+@jax.jit
 def tnfw_enclosed_mass(R, rhos, rs, ft, rt):
     tau = rt / rs
     u = R / rs
@@ -966,6 +967,7 @@ def tnfw_enclosed_mass(R, rhos, rs, ft, rt):
     term4 = 2*tau / (t2 + 1)**2 * jnp.arctan(u / tau)
     return 4 * jnp.pi * rhos * ft * rs**3 * t2 * (term1 + term2 + term3 + term4)
 
+@jax.jit
 def nfw_params_from_infall(m_infall, c_infall, z_infall,
                            H0=67.4, Omega_m=0.315, Omega_L=0.685):
     """
@@ -981,7 +983,7 @@ def nfw_params_from_infall(m_infall, c_infall, z_infall,
     rs = R200 / c_infall
     rhos = m_infall / (4 * jnp.pi * rs ** 3 * (jnp.log(1 + c_infall) - c_infall / (1 + c_infall)))
     return rhos, rs, R200
-
+@jax.jit
 def tidally_evolved_nfw_params_from_infall(m_infall, c_infall, z_infall, f_bound):
     """
     Compute the density profile a tidally evolved (along tidal tracks) TNFW profile, given infall properties and
@@ -995,14 +997,16 @@ def tidally_evolved_nfw_params_from_infall(m_infall, c_infall, z_infall, f_bound
     rt = (1 + A) * f_bound ** B / (1 + A * f_bound ** (2 * B)) / jnp.exp(C * (1 - f_bound)) * r200
     return rhos, rs, ft, rt
 
-def make_tnfw_potential_from_infall(m_infall, c_infall, z_infall, f_bound, units=None):
+# Cannot compile this block alone, it returns an object
+def make_tnfw_potential_from_infall(m_infall, c_infall, z_infall, f_bound):
     """
     Create a TNFW potential from infall properties
     """
     rhos, rs, ft, rt = tidally_evolved_nfw_params_from_infall(m_infall, c_infall, z_infall, f_bound)
-    return make_tnfw_potential_from_density_profile(rhos, rs, ft, rt, units=units)
+    return make_tnfw_potential_from_density_profile(rhos, rs, ft, rt)
 
-def make_tnfw_potential_from_density_profile(rhos, rs, ft, rt, n_grid=256, units=None):
+# Cannot compile this block alone, it returns an object
+def make_tnfw_potential_from_density_profile(rhos, rs, ft, rt, n_grid=256):
     """
     Like get_potential_from_density but for a TNFW profile given
     rhos, rs, ft, rt directly. Returns the object with r_grid and phi_grid
@@ -1013,7 +1017,7 @@ def make_tnfw_potential_from_density_profile(rhos, rs, ft, rt, n_grid=256, units
         return rhos * ft / (x * (1 + x)**2 * (1 + (r / rt)**2))
 
     r_grid = jnp.logspace(jnp.log10(1e-4 * rs), jnp.log10(1e3 * rs), n_grid)
-    return get_potential_from_density(density_func=tnfw_density, r_grid=r_grid, units=units)
+    return get_potential_from_density(density_func=tnfw_density, r_grid=r_grid, units=usys)
 
 class TNFWSubhaloLinePotential(Potential):
     def __init__(self, m_infall, c_infall, z_infall, f_bound,
@@ -1026,17 +1030,33 @@ class TNFWSubhaloLinePotential(Potential):
 
         # calculate density profile parameters
         rhos, rs, ft, rt = tidally_evolved_nfw_params_from_infall(m_infall, c_infall, z_infall, f_bound)
-        # precompute potential grids for each subhalo at init time
-        n_subhalos = len(m_infall)
-        n_grid = 256
-        log_r_grids = jnp.zeros((n_subhalos, n_grid))
-        phi_grids = jnp.zeros((n_subhalos, n_grid))
-        for i in range(n_subhalos):
+
+        # 1. Define a function that computes the grids for a SINGLE subhalo
+        def compute_single_grid(rho_s_i, r_s_i, f_t_i, r_t_i):
             pot_i = make_tnfw_potential_from_density_profile(
-                rhos[i], rs[i], ft[i], rt[i], n_grid=n_grid, units=units
+                rho_s_i, r_s_i, f_t_i, r_t_i, n_grid=256
             )
-            log_r_grids = log_r_grids.at[i].set(jnp.log(pot_i.r_grid))
-            phi_grids = phi_grids.at[i].set(pot_i.phi_grid)
+            return jnp.log(pot_i.r_grid), pot_i.phi_grid
+
+        # 2. Vectorize the function across the 0th axis of all four input arrays
+        vmap_compute = jax.vmap(compute_single_grid, in_axes=(0, 0, 0, 0))
+
+        # 3. Execute in parallel (JAX automatically stacks the results into arrays of shape (n_subhalos, 256))
+        log_r_grids, phi_grids = vmap_compute(rhos, rs, ft, rt)
+
+
+
+        # # precompute potential grids for each subhalo at init time
+        # n_subhalos = len(m_infall)
+        # n_grid = 256
+        # log_r_grids = jnp.zeros((n_subhalos, n_grid))
+        # phi_grids = jnp.zeros((n_subhalos, n_grid))
+        # for i in range(n_subhalos):
+        #     pot_i = make_tnfw_potential_from_density_profile(
+        #         rhos[i], rs[i], ft[i], rt[i], n_grid=n_grid
+        #     )
+        #     log_r_grids = log_r_grids.at[i].set(jnp.log(pot_i.r_grid))
+        #     phi_grids = phi_grids.at[i].set(pot_i.phi_grid)
 
         super().__init__(units, {
             'subhalo_x0': subhalo_x0, 'subhalo_v': subhalo_v,

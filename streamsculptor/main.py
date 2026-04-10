@@ -4,7 +4,7 @@ from jax import random
 import equinox as eqx
 import diffrax
 from diffrax import diffeqsolve, ODETerm, Dopri5, SaveAt, PIDController, ForwardMode
-
+from functools import partial
 jax.config.update("jax_enable_x64", True)
 
 # =============================================================================
@@ -37,7 +37,7 @@ class Potential(eqx.Module):
 
     def __init__(self, units=usys):
         self.units = units
-    
+
     def potential(self, xyz, t):
         raise NotImplementedError("Subclasses must implement the potential function.")
 
@@ -88,7 +88,8 @@ class Potential(eqx.Module):
         L_close = x - r_hat * r_tidal
         L_far = x + r_hat * r_tidal
         return L_close, L_far  
-
+    
+    #@partial(jax.jit, static_argnames=['self'])
     def velocity_acceleration(self, t, xv, args):
         x, v = xv[:3], xv[3:]
         acceleration = -self.gradient(x, t)
@@ -100,6 +101,7 @@ class Potential(eqx.Module):
 
     @eqx.filter_jit
     def integrate_orbit(self, w0, ts, dense=False, solver=Dopri5(scan_kind='bounded'), rtol=1e-7, atol=1e-7, dtmin=0.3, dtmax=None, max_steps=10_000, t0=None, t1=None, steps=False, jump_ts=None, throw=False):
+        #vel_acc = jax.jit(self.velocity_acceleration)
         term = ODETerm(self.velocity_acceleration)
         saveat = SaveAt(t0=False, t1=False, ts=ts if not dense else None, dense=dense, steps=steps)
         stepsize_controller = PIDController(rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax, force_dtmin=True, jump_ts=jump_ts)

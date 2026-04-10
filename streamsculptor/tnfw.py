@@ -19,6 +19,7 @@ import equinox as eqx
 
 from streamsculptor.main import Potential, usys
 from streamsculptor.bfe import BFEPotential
+from functools import partial
 
 jax.config.update("jax_enable_x64", True)
 
@@ -101,6 +102,8 @@ class TNFWPotential(BFEPotential):
             m_infall, c_infall, z_infall, f_bound
         )
         return cls.from_profile(rhos, rs, ft, rt, n_r=n_r, units=units)
+
+
 
 
 # =============================================================================

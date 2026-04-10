@@ -49,8 +49,9 @@ plain floats in kpc / Msun / Myr units to match the default GalacticUnitSystem.
 from __future__ import annotations
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
-
+from functools import partial
 try:
     from streamsculptor.main import Potential, usys
 except ImportError as e:
@@ -89,15 +90,13 @@ class BFEPotential(Potential):
         Defaults to the streamsculptor default unit system (usys).
     """
 
-    # MultipoleExpansion is registered as a JAX pytree (see bfeax/potential.py),
-    # so it can be a dynamic field — its internal spline arrays are proper leaves.
-    _exp: MultipoleExpansion
+    _exp: MultipoleExpansion# = eqx.field(static=True) # used to have just  _exp: MultipoleExpansion
 
     def __init__(self, expansion: MultipoleExpansion, units=usys):
         super().__init__(units)
         self._exp = expansion
 
-
+    
     def potential(self, xyz, t):
         """
         Evaluate Phi(x, y, z).
@@ -119,6 +118,7 @@ class BFEPotential(Potential):
         """
         return self.units.G * self._exp(xyz[0], xyz[1], xyz[2])
 
+    
     def gradient(self,xyz,t):
         """
         Evaluate the gradient of the potential at xyz.

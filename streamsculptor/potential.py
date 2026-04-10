@@ -8,6 +8,7 @@ import interpax
 from jax.scipy.interpolate import RegularGridInterpolator
 from jax_cosmo.scipy.interpolate import InterpolatedUnivariateSpline
 import os
+from functools import partial
 from typing import Callable, Any
 
 # Assuming main.py is in the same directory or accessible via import
@@ -53,6 +54,7 @@ class NFWPotential(Potential):
         self.m = m
         self.r_s = r_s
 
+    #@eqx.filter_jit
     def potential(self, xyz, t):
         v_h2 = -self.units.G * self.m / self.r_s
         m_val = jnp.sqrt(xyz[0]**2 + xyz[1]**2 + xyz[2]**2) / self.r_s
@@ -79,6 +81,47 @@ class TriaxialNFWPotential(Potential):
         m_val = jnp.sqrt(xyz_scaled[0]**2 + xyz_scaled[1]**2 + xyz_scaled[2]**2) / self.r_s
         return v_h2 * jnp.log(1.0 + m_val) / m_val
 
+class tNFWPotential(Potential):
+    rhos: float
+    r_s: float
+    r_t: float
+    f_t: float
+
+    def __init__(self, rhos, r_s, r_t, f_t, units=usys):
+        super().__init__(units)
+        self.rhos = rhos
+        self.r_s = r_s
+        self.r_t = r_t
+        self.f_t = f_t
+
+    def potential(self, xyz, t):
+        """
+        Analytic 3D gravitational potential of the truncated NFW profile (Baltz+2009).
+        """
+        r = jnp.linalg.norm(xyz)
+        # Prevent Nan at the exact core
+        r = jnp.clip(r, a_min=1e-10)
+
+        tau = self.r_t / self.r_s
+        t2  = tau ** 2
+        t2_m1 = t2 - 1
+        t2_p1 = t2 + 1
+        
+      
+        prefactor = self.units.G * 4 * jnp.pi * self.rhos * self.f_t * self.r_s ** 2 * t2 / (t2_p1 ** 2)
+        
+        # The constant term ensures Phi -> 0 as r -> infinity
+        term1 = jnp.pi * t2_m1 / (2 * tau) - jnp.log(t2)
+        
+        term3 = (2 - t2_m1 * self.r_s / r) * jnp.log(1 + r / self.r_s)
+        term4 = (t2_m1 * self.r_s / (2 * r) - 1) * jnp.log(1 + (r / self.r_t) ** 2)
+        term5 = -(t2_m1 / tau + 2 * self.r_t / r) * jnp.arctan(r / self.r_t)
+        
+        return prefactor * (term1 + term3 + term4 + term5)
+
+
+
+
 class Isochrone(Potential):
     m: float
     a: float
@@ -100,7 +143,8 @@ class PlummerPotential(Potential):
         super().__init__(units)
         self.m = m
         self.r_s = r_s
-
+        
+    #@eqx.filter_jit
     def potential(self, xyz, t):
         r_squared = xyz[0]**2 + xyz[1]**2 + xyz[2]**2
         return -self.units.G * self.m / jnp.sqrt(r_squared + self.r_s**2)
@@ -454,7 +498,7 @@ class ZhaoPotential(Potential):
         return dphi_dr * xyz / r
 
 # =============================================================================
-# Custom & Density-based Potentials
+# Misc
 # =============================================================================
 
 class UniformAcceleration(Potential):

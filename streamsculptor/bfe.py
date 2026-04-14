@@ -187,12 +187,13 @@ class BFEPotential(Potential):
     @classmethod
     def from_spheroid(
         cls,
-        rho0: float,
         alpha: float,
         beta: float,
         gamma: float,
         a: float,
         *,
+        rho0: float | None = None,
+        mass: float | None = None,
         p: float = 1.0,
         q: float = 1.0,
         r_cut: float | None = None,
@@ -205,7 +206,7 @@ class BFEPotential(Potential):
         n_phi: int | None = None,
         symmetry: str | None = None,
         units=usys,
-    ) -> "BFEAxPotential":
+    ) -> "BFEPotential":
         """
         Build from Agama-style spheroid parameters.
 
@@ -216,6 +217,10 @@ class BFEPotential(Potential):
         where r = sqrt(x^2 + (y/p)^2 + (z/q)^2) is the spheroidal radius.
         All length parameters should be in kpc; rho0 in Msun/kpc^3.
 
+        Exactly one of `rho0` or `mass` must be supplied:
+          - rho0 : density normalisation in Msun/kpc^3 (used directly)
+          - mass : total integrated mass in Msun (rho0 is derived numerically)
+
         Common profiles
         ---------------
         NFW       : alpha=1, beta=3, gamma=1
@@ -225,9 +230,10 @@ class BFEPotential(Potential):
 
         Parameters
         ----------
-        rho0     : density normalisation in Msun/kpc^3
         alpha, beta, gamma : profile shape exponents (dimensionless)
         a        : scale radius in kpc
+        rho0     : density normalisation in Msun/kpc^3  (mutually exclusive with mass)
+        mass     : total mass in Msun                   (mutually exclusive with rho0)
         p, q     : y and z axis ratios (dimensionless, default 1.0 = spherical)
         r_cut    : outer exponential cutoff radius in kpc (None = no cutoff)
         xi       : cutoff strength (dimensionless, 0 = no cutoff)
@@ -238,10 +244,26 @@ class BFEPotential(Potential):
         symmetry : "spherical", "axisymmetric", "triaxial", or None
         units    : GalacticUnitSystem (default: streamsculptor usys)
         """
+        if (rho0 is None) == (mass is None):
+            raise ValueError("Exactly one of `rho0` or `mass` must be provided.")
+
+        if mass is not None:
+            # Integrate the unnormalised profile over [r_min, r_max] to get rho0
+            _r_cut = r_cut if r_cut is not None else jnp.inf
+            r_eval    = jnp.logspace(jnp.log10(r_min), jnp.log10(r_max), 10_000)
+            r_over_a  = r_eval / a
+            unnorm    = (
+                r_over_a ** (-gamma)
+                * (1.0 + r_over_a ** alpha) ** ((gamma - beta) / alpha)
+                * jnp.where(jnp.isinf(_r_cut), 1.0, jnp.exp(-(r_eval / _r_cut) ** xi))
+            )
+            integral  = jnp.trapezoid(unnorm * 4.0 * jnp.pi * r_eval**2, x=r_eval)
+            rho0 = float(mass / integral)
+
         exp = MultipoleExpansion.from_spheroid(
             rho0=rho0, alpha=alpha, beta=beta, gamma=gamma, a=a,
             p=p, q=q, r_cut=r_cut, xi=xi,
             r_min=r_min, r_max=r_max, n_r=n_r, l_max=l_max,
-            n_theta=n_theta, n_phi=n_phi, symmetry=symmetry,
+            n_theta=n_theta, n_phi=n_phi, symmetry=symmetry, prune_modes=False,
         )
         return cls(exp, units=units)

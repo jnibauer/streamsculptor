@@ -669,6 +669,8 @@ class MW_LMC_Potential(Potential):
 
     def potential(self, xyz, t):
         raise NotImplementedError("Potential not implemented, force is non-conservative")
+
+
         
 class AGAMA_MW_LMC_Potential(Potential):
     # --- Static interpolators (identical pattern to working class) ---
@@ -869,6 +871,182 @@ class AGAMA_MW_LMC_Potential(Potential):
         return self.total_pot.gradient(xyz, t)
     
     @eqx.filter_jit
+    def acceleration(self, xyz, t):
+        return self.total_pot.acceleration(xyz, t)
+
+    def potential(self, xyz, t):
+        raise NotImplementedError(
+            "Potential not implemented; force is non-conservative."
+        )
+
+def _require_bfeax():
+    try:
+        from streamsculptor.bfe import BFEPotential
+    except Exception as e:
+        raise ImportError(
+            "bfeax-based potential requires the 'bfeax' extra.\n"
+            "Install with: pip install git+https://github.com/jnibauer/bfeax.git"
+        ) from e
+    return BFEPotential
+
+
+
+
+class MW_LMC_Potential_truncNFW(Potential):
+    """
+    MW-LMC potential in the non-inertial frame of the Milky Way.
+    All three MW components and the LMC use BFEPotential.from_spheroid
+    (no agama dependency).
+
+    MW parameters match AGAMA_MW_LMC_Potential:
+      Bulge : mass=1.2e10, scaleRadius=0.2, outerCutoffRadius=1.8,
+              gamma=0, beta=1.8, alpha=1, cutoffStrength=2
+      Disk  : MiyamotoNagaiDisk  m=5e10, a=3.0, b=0.3  (analytic)
+      Halo  : densityNorm=1.35e7, scaleRadius=14, outerCutoffRadius=300,
+              cutoffStrength=4, gamma=1, beta=3
+
+    LMC matches the Agama spheroid:
+      mass=1.5e11,  scaleRadius=(mass/1e11)^0.6*8.5,
+      outerCutoffRadius=scaleRadius*10,  gamma=1, beta=3, cutoffStrength=2
+
+    Parameters
+    ----------
+    n_r   : radial grid points for all BFE expansions (default 128)
+    l_max : max spherical harmonic degree (default 0 — all profiles are
+            spherical so only the monopole contributes)
+    units : GalacticUnitSystem (default usys)
+    """
+    LMC_x: Any
+    LMC_y: Any
+    LMC_z: Any
+
+    vel_x: Any
+    vel_y: Any
+    vel_z: Any
+
+    pot_MW: Potential_Combine
+    pot_LMC: Any                             # BFEPotential
+    translating_LMC_pot: TimeDepTranslatingPotential
+    unif_acc: UniformAcceleration
+    total_pot: Potential_Combine
+
+    def __init__(self, n_r: int = 128, l_max: int = 0, units=usys):
+        BFEPotential = _require_bfeax()
+        super().__init__(units)
+
+        # ------------------------------------------------------------------
+        # 1. Load trajectory data
+        # ------------------------------------------------------------------
+        data_path_MW = os.path.join(
+            os.path.dirname(__file__), "data/LMC_MW_potential", "MW_motion_dict.npy"
+        )
+        data_path_LMC = os.path.join(
+            os.path.dirname(__file__), "data/LMC_MW_potential", "LMC_motion_dict.npy"
+        )
+        MW_motion_dict  = jnp.load(data_path_MW,  allow_pickle=True).item()
+        LMC_motion_dict = jnp.load(data_path_LMC, allow_pickle=True).item()
+
+        flip_tsave   = LMC_motion_dict["flip_tsave"]
+        flip_trajLMC = LMC_motion_dict["flip_trajLMC"]
+        flip_traj_MW = MW_motion_dict["flip_traj"]
+
+        # ------------------------------------------------------------------
+        # 2. Cubic interpolators (static)
+        # ------------------------------------------------------------------
+        self.LMC_x = interpax.Interpolator1D(x=flip_tsave, f=flip_trajLMC[:, 0], method="cubic2")
+        self.LMC_y = interpax.Interpolator1D(x=flip_tsave, f=flip_trajLMC[:, 1], method="cubic2")
+        self.LMC_z = interpax.Interpolator1D(x=flip_tsave, f=flip_trajLMC[:, 2], method="cubic2")
+        self.vel_x = interpax.Interpolator1D(x=flip_tsave, f=flip_traj_MW[:, 3], method="cubic2")
+        self.vel_y = interpax.Interpolator1D(x=flip_tsave, f=flip_traj_MW[:, 4], method="cubic2")
+        self.vel_z = interpax.Interpolator1D(x=flip_tsave, f=flip_traj_MW[:, 5], method="cubic2")
+
+        LMC_x_local, LMC_y_local, LMC_z_local = self.LMC_x, self.LMC_y, self.LMC_z
+        vel_x_local, vel_y_local, vel_z_local  = self.vel_x, self.vel_y, self.vel_z
+
+        def lmc_center_fn(t):
+            return jnp.array([LMC_x_local(t), LMC_y_local(t), LMC_z_local(t)])
+
+        def mw_velocity_fn(t):
+            return jnp.array([vel_x_local(t), vel_y_local(t), vel_z_local(t)])
+
+        # ------------------------------------------------------------------
+        # 3. MW bulge — spheroid: mass=1.2e10, a=0.2, r_cut=1.8,
+        #                         gamma=0, beta=1.8, cutoffStrength=2
+        # ------------------------------------------------------------------
+        pot_bulge = BFEPotential.from_spheroid(
+            mass=1.2e10,
+            alpha=1.0, beta=1.8, gamma=0.0,
+            a=0.2,
+            r_cut=1.8, xi=2.0,
+            r_min=1e-4, r_max=200.0,
+            n_r=n_r, l_max=l_max,
+            symmetry="spherical",
+            units=units,
+        )
+
+        # ------------------------------------------------------------------
+        # 4. MW disk — analytic (unchanged)
+        # ------------------------------------------------------------------
+        pot_disk = MiyamotoNagaiDisk(m=5.0e10, a=3.0, b=0.3, units=units)
+
+        # ------------------------------------------------------------------
+        # 5. MW halo — spheroid: densityNorm=1.35e7, a=14, r_cut=300,
+        #                        gamma=1, beta=3, cutoffStrength=4
+        # ------------------------------------------------------------------
+        pot_halo = BFEPotential.from_spheroid(
+            rho0=1.35e7,
+            alpha=1.0, beta=3.0, gamma=1.0,
+            a=14.0,
+            r_cut=300.0, xi=4.0,
+            r_min=0.1, r_max=1000.0,
+            n_r=n_r, l_max=l_max,
+            symmetry="spherical",
+            units=units,
+        )
+
+        self.pot_MW = Potential_Combine([pot_bulge, pot_disk, pot_halo], units=units)
+
+        # ------------------------------------------------------------------
+        # 6. LMC: truncated NFW matching agama.Potential(type='spheroid',
+        #         mass=1.5e11, scaleradius=radiusLMC,
+        #         outercutoffradius=radiusLMC*10, gamma=1, beta=3)
+        #    agama defaults: alpha=1, cutoffStrength=2
+        # ------------------------------------------------------------------
+        massLMC   = 1.5e11
+        radiusLMC = (massLMC / 1e11) ** 0.6 * 8.5
+        r_cut_lmc = radiusLMC * 10.0
+
+        self.pot_LMC = BFEPotential.from_spheroid(
+            mass=massLMC,
+            alpha=1.0, beta=3.0, gamma=1.0,
+            a=radiusLMC,
+            r_cut=r_cut_lmc,
+            xi=2.0,
+            r_min=0.1,
+            r_max=500.0,
+            n_r=n_r, l_max=l_max,
+            symmetry="spherical",
+            units=units,
+        )
+
+        # ------------------------------------------------------------------
+        # 7. Time-dependent + non-inertial pieces
+        # ------------------------------------------------------------------
+        self.translating_LMC_pot = TimeDepTranslatingPotential(
+            pot=self.pot_LMC, center_spl=lmc_center_fn, units=units
+        )
+        self.unif_acc = UniformAcceleration(velocity_func=mw_velocity_fn, units=units)
+
+        # ------------------------------------------------------------------
+        # 8. Final combined potential
+        # ------------------------------------------------------------------
+        self.total_pot = Potential_Combine(
+            [self.pot_MW, self.translating_LMC_pot, self.unif_acc], units=units
+        )
+
+    def gradient(self, xyz, t):
+        return self.total_pot.gradient(xyz, t)
+
     def acceleration(self, xyz, t):
         return self.total_pot.acceleration(xyz, t)
 

@@ -21,11 +21,13 @@ Based on Nibauer et al. 2025: https://arxiv.org/abs/2410.21174 (see below for bi
 - For editable/development mode: `pip install -e .`
 
 
+### Note
+The code is undergoing a major refactor to utilize equinox pytree structures and other improvements that should support speed, flexibility, and compatability with $\texttt{galax}$ potentials. In due time, this branch will be merged with main. Feel free to use `git checkout eqx_everything` for the latest development version of $\texttt{streamsculptor}$ (recommended for most use cases).
 
 
 
 Optional installations:
-- Agama (for interpolation of spheroidal density and potential)
+- [bfeax](https://github.com/jnibauer/bfeax) for multipole expansions in Jax.
 
 ------
 ### Common install issues

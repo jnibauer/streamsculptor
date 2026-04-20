@@ -31,6 +31,7 @@ class ImpactGenerator(eqx.Module):
     b_low: jnp.ndarray
     b_high: jnp.ndarray
     length_osc: dict
+    _t_impact_pdf: jnp.ndarray
 
     def __init__(self,
                  pot,
@@ -47,7 +48,9 @@ class ImpactGenerator(eqx.Module):
                  phi1_bounds=None,
                  phi1_exclude=[1.0, 1.0],
                  stream_length=None,
-                 seednum=0):
+                 seednum=0,
+                 nsub_times=None,
+                 nsub_vals=None):
 
         self.pot = pot
         self.tobs = jnp.asarray(tobs)
@@ -96,12 +99,27 @@ class ImpactGenerator(eqx.Module):
         lead_first = self.stream[first_strip_inds[0]]
         trail_first = self.stream[first_strip_inds[1]]
         
-        self.length_osc = compute_length_oscillations(pot=self.pot, 
+        self.length_osc = compute_length_oscillations(pot=self.pot,
                                                       prog_today=self.prog_today,
                                                       first_stripped_lead=lead_first,
                                                       first_stripped_trail=trail_first,
                                                       t_age=jnp.abs(self.tImpactBounds.min()),
                                                       length_today=self.stream_length)
+
+        if nsub_times is not None and nsub_vals is not None:
+            nsub_ts = jnp.asarray(nsub_times)
+            nsub_vs = jnp.asarray(nsub_vals)
+            ts = self.length_osc['ts']
+            if float(jnp.min(nsub_ts)) > float(jnp.min(ts)) or float(jnp.max(nsub_ts)) < float(jnp.max(ts)):
+                raise ValueError(
+                    f"nsub_times range [{float(jnp.min(nsub_ts)):.2f}, {float(jnp.max(nsub_ts)):.2f}] Myr "
+                    f"does not cover length_osc ts range [{float(jnp.min(ts)):.2f}, {float(jnp.max(ts)):.2f}] Myr. "
+                    "Supply nsub_times spanning at least [-t_age, 0]."
+                )
+            nsub_interp = jnp.interp(ts, nsub_ts, nsub_vs)
+            self._t_impact_pdf = self.length_osc['length_func'] * nsub_interp
+        else:
+            self._t_impact_pdf = self.length_osc['length_func']
     @eqx.filter_jit
     def w_parallel_sample(self, vs):
         """
@@ -137,7 +155,7 @@ class ImpactGenerator(eqx.Module):
         
         bImpact = jax.random.uniform(minval=self.b_low, maxval=self.b_high, key=keys[0], shape=(self.NumImpacts,))
     
-        tImpact = sample_from_1D_pdf(x=self.length_osc['ts'], y=self.length_osc['length_func'], key=keys[1], num_samples=self.NumImpacts)
+        tImpact = sample_from_1D_pdf(x=self.length_osc['ts'], y=self._t_impact_pdf, key=keys[1], num_samples=self.NumImpacts)
         
         def phi1_exclude_provided(phi1_exc):
             seg1 = jnp.linspace(self.phi1_bounds[0], phi1_exc[0], 1000)

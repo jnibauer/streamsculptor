@@ -1,6 +1,7 @@
+import numpy as np
 import jax
 import jax.numpy as jnp
-import jax.random as random 
+import jax.random as random
 import equinox as eqx
 from jax.scipy.integrate import trapezoid
 import astropy.units as u
@@ -167,11 +168,146 @@ class RateCalculator(eqx.Module):
         log10mass_arr = jnp.linspace(log10M_min, log10M_max, 101)
         r_arr = jnp.linspace(r_min, r_max, 100)
         log10_M, R = jnp.meshgrid(log10mass_arr, r_arr, indexing='ij')
-        
+
         func_map = lambda r_val, m_val: self.dn_dlog10M(r_val, m_val, slope=slope, gamma=gamma, M_hm=M_hm, beta=beta)
         inp = jax.vmap(func_map)(R.ravel(), log10_M.ravel()).reshape(R.shape)
         inp = inp * 4 * jnp.pi * R**2
-        
+
         I1 = trapezoid(y=inp, x=log10mass_arr, axis=0)
         I2 = trapezoid(y=I1, x=r_arr)
         return I2
+
+
+class TNFWSampler:
+    """
+    Samples truncated NFW subhalo parameters (m_infall, c_infall, z_infall, f_bound)
+    using pyhalo's tidal evolution and concentration models with a user-defined
+    power-law subhalo mass function.
+
+    pyhalo, colossus, and scipy are optional dependencies imported at instantiation.
+
+    Parameters
+    ----------
+    z_eval : float
+        Redshift at which the stream/host is evaluated (for infall distribution).
+    logM_host : float
+        log10(host halo mass / Msun).
+    chost : float
+        Host halo concentration (used by the tidal evolution model).
+    log10M_low : float
+        Lower bound on log10(infall mass / Msun) for SHMF sampling.
+    log10M_high : float
+        Upper bound on log10(infall mass / Msun) for SHMF sampling.
+    slope : float
+        Power-law slope of the SHMF (positive convention, default 1.9).
+    bound_mass_cut : float
+        Minimum surviving bound mass [Msun]; halos below this threshold are dropped.
+    """
+
+    def __init__(self,
+                 z_eval=0.0,
+                 logM_host=12.0,
+                 chost=9.0,
+                 log10M_low=6.0,
+                 log10M_high=10.0,
+                 slope=1.9,
+                 bound_mass_cut=1e6):
+
+        try:
+            from pyHalo.Halos.accretion import InfallDistributionDirectMilkyWay30kpc
+            from pyHalo.Halos.concentration import ConcentrationDiemerJoyce
+            from pyHalo.Halos.galacticus_truncation.interp_mass_loss import InterpGalacticusMW
+            from astropy.cosmology import Planck18
+            from colossus.cosmology import cosmology as colossus_cosmology
+            from scipy.interpolate import interp1d
+        except ImportError as e:
+            raise ImportError(
+                "TNFWSampler requires pyhalo and its dependencies. "
+                "Install with: pip install pyHalo colossus scipy"
+            ) from e
+
+        colossus_cosmology.setCosmology('planck18')
+
+        self.z_eval = z_eval
+        self.logM_host = logM_host
+        self.chost = chost
+        self.log10M_low = log10M_low
+        self.log10M_high = log10M_high
+        self.slope = slope
+        self.bound_mass_cut = bound_mass_cut
+
+        self._tidal_model = InterpGalacticusMW(rmax=30.0)
+        self._infall_dist = InfallDistributionDirectMilkyWay30kpc(z_eval, logM_host)
+        self._concentration_model = ConcentrationDiemerJoyce(Planck18)
+
+        zvalues_interp = np.linspace(0.0, 10.0, 100)
+        lookback_times = [Planck18.lookback_time(zi).value for zi in zvalues_interp]
+        self._time_since_infall_interp = interp1d(zvalues_interp, lookback_times)
+
+    def _sample_masses(self, N, seed):
+        """
+        Draw N infall masses [Msun] from a power-law SHMF via inverse-CDF sampling.
+        """
+        rng = np.random.default_rng(seed)
+        x = rng.uniform(0.0, 1.0, N)
+        s = self.slope
+        lo, hi = self.log10M_low, self.log10M_high
+        log10m = (x * (hi**(1 - s) - lo**(1 - s)) + lo**(1 - s))**(1.0 / (1 - s))
+        return 10**log10m
+
+    def sample(self, N, seed=0, verbose=True):
+        """
+        Sample N halos from the SHMF, apply tidal evolution, and return surviving halos.
+
+        Parameters
+        ----------
+        N : int
+            Number of halos to draw from the SHMF before the bound-mass filter.
+        seed : int
+            Seed for the numpy RNG used in mass sampling.
+        verbose : bool
+            Show a tqdm progress bar over the tidal-evolution loop.
+
+        Returns
+        -------
+        dict of jnp.ndarray
+            Keys: m_infall, c_infall, z_infall, f_bound (each shape [N_surviving]),
+            and N_surviving (scalar int).
+        """
+        _m_infall = self._sample_masses(N, seed)
+
+        m_infall_buf = np.zeros(N)
+        c_infall_buf = np.zeros(N)
+        z_infall_buf = np.zeros(N)
+        f_bound_buf  = np.zeros(N)
+        k = 0
+
+        iterator = _m_infall
+        if verbose:
+            try:
+                import tqdm
+                iterator = tqdm.tqdm(_m_infall, desc="Sampling TNFW params")
+            except ImportError:
+                pass
+
+        for m in iterator:
+            z              = self._infall_dist(m)
+            c              = self._concentration_model.nfw_concentration(m, z)
+            t_since_infall = self._time_since_infall_interp(z)
+            log10_fbound   = self._tidal_model(np.log10(c), t_since_infall, self.chost)
+            f              = 10**log10_fbound
+
+            if m * f >= self.bound_mass_cut:
+                m_infall_buf[k] = m
+                c_infall_buf[k] = c
+                z_infall_buf[k] = z
+                f_bound_buf[k]  = f
+                k += 1
+
+        return dict(
+            m_infall    = jnp.array(m_infall_buf[:k]),
+            c_infall    = jnp.array(c_infall_buf[:k]),
+            z_infall    = jnp.array(z_infall_buf[:k]),
+            f_bound     = jnp.array(f_bound_buf[:k]),
+            N_surviving = jnp.array(k),
+        )

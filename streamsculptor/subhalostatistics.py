@@ -240,7 +240,7 @@ class TNFWSampler:
         self._infall_dist = InfallDistributionDirectMilkyWay30kpc(z_eval, logM_host)
         self._concentration_model = ConcentrationDiemerJoyce(Planck18)
 
-        zvalues_interp = np.linspace(0.0, 10.0, 100)
+        zvalues_interp = np.linspace(0.0, 20.0, 100)
         lookback_times = [Planck18.lookback_time(zi).value for zi in zvalues_interp]
         self._time_since_infall_interp = interp1d(zvalues_interp, lookback_times)
 

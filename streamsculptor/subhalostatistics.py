@@ -153,6 +153,8 @@ class RateCalculator(eqx.Module):
         Generalized version of dN_encounter_dlog10M that incorporates stream length oscillations.
         Takes a function b_max_func that can depend on log10M and returns b_max. 
         log10M: a single input mass. Use vmap to vectorize over many masses
+
+        - dN_enc/dlog10M \propto integral over time of l(t) * dn/dlog10M(r(t), log10M)
         """
         dn_dlog10M_val = self.dn_dlog10M(log10M=log10M, r=self.orbital_r, slope=slope, gamma=gamma, beta=beta, M_hm=M_hm)
         b_max = b_max_func(log10M)

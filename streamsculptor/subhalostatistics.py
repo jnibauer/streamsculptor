@@ -233,6 +233,7 @@ class RateCalculator(eqx.Module):
         the product of the stream's length and dn/dlog10M over time, incporporating 
         stream length oscillations. 
         b_max_func: a function that takes log10M and returns b_max. 
+        linear_growth: if True, assume stream length grows linearly with time. Default False, uses numerically estimated length oscillations.
         """
         key1, key2 = random.split(key, 2)
         N_encounter_rate = self.N_encounter_general(log10M_min=log10M_min, log10M_max=log10M_max, b_max_func=b_max_func, normalization=normalization, slope=slope, concentration_fac=concentration_fac, gamma=gamma, beta=beta, M_hm=M_hm, linear_growth=linear_growth)
@@ -338,15 +339,14 @@ class TNFWSampler:
         self._time_since_infall_interp = interp1d(zvalues_interp, lookback_times)
 
     def _sample_masses(self, N, seed):
-        """
-        Draw N infall masses [Msun] from a power-law SHMF via inverse-CDF sampling.
-        """
         rng = np.random.default_rng(seed)
         x = rng.uniform(0.0, 1.0, N)
         s = self.slope
-        lo, hi = self.log10M_low, self.log10M_high
-        log10m = (x * (hi**(1 - s) - lo**(1 - s)) + lo**(1 - s))**(1.0 / (1 - s))
-        return 10**log10m
+        M_lo = 10**self.log10M_low
+        M_hi = 10**self.log10M_high
+        # inverse-CDF for dN/dM ~ M^{-s}
+        masses = (x * (M_hi**(1 - s) - M_lo**(1 - s)) + M_lo**(1 - s))**(1.0 / (1 - s))
+        return masses
 
     def sample(self, N, seed=0, verbose=True):
         """

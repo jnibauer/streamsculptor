@@ -154,7 +154,7 @@ class RateCalculator(eqx.Module):
         Takes a function b_max_func that can depend on log10M and returns b_max. 
         log10M: a single input mass. Use vmap to vectorize over many masses
 
-        - dN_enc/dlog10M \propto integral over time of l(t) * dn/dlog10M(r(t), log10M)
+        - dN_enc/dlog10M proportional to integral over time of l(t) * dn/dlog10M(r(t), log10M)
         """
         dn_dlog10M_val = self.dn_dlog10M(log10M=log10M, r=self.orbital_r, slope=slope, gamma=gamma, beta=beta, M_hm=M_hm)
         b_max = b_max_func(log10M)
@@ -320,6 +320,7 @@ class TNFWSampler:
                 "Install with: pip install pyHalo colossus scipy"
             ) from e
 
+
         colossus_cosmology.setCosmology('planck18')
 
         self.z_eval = z_eval
@@ -335,7 +336,7 @@ class TNFWSampler:
         self._concentration_model = ConcentrationDiemerJoyce(Planck18)
 
         zvalues_interp = np.linspace(0.0, 20.0, 100)
-        lookback_times = [Planck18.lookback_time(zi).value for zi in zvalues_interp]
+        lookback_times = Planck18.lookback_time(zvalues_interp) #[Planck18.lookback_time(zi).value for zi in zvalues_interp]
         self._time_since_infall_interp = interp1d(zvalues_interp, lookback_times)
 
     def _sample_masses(self, N, seed):
@@ -403,4 +404,43 @@ class TNFWSampler:
             z_infall    = jnp.array(z_infall_buf[:k]),
             f_bound     = jnp.array(f_bound_buf[:k]),
             N_surviving = jnp.array(k),
+        )
+
+    def sample_fast(self, N, seed=0):
+        """
+        Vectorized version of ``sample`` using the same pyhalo call chain.
+
+        np.vectorize is used where pyhalo functions require scalar inputs
+        (_infall_dist, nfw_concentration, _tidal_model). The time-since-infall
+        interpolator already accepts arrays and is called directly. The
+        bound-mass filter is replaced by numpy boolean masking.
+
+        Parameters
+        ----------
+        N : int
+            Number of halos to draw before the bound-mass filter.
+        seed : int
+            Seed passed to ``_sample_masses`` for the SHMF draw.
+
+        Returns
+        -------
+        dict of jnp.ndarray
+            Same keys as ``sample``: m_infall, c_infall, z_infall, f_bound,
+            N_surviving.
+        """
+        masses = self._sample_masses(N, seed)
+
+        z_arr    = np.vectorize(self._infall_dist)(masses)
+        c_arr    = np.vectorize(self._concentration_model.nfw_concentration)(masses, z_arr)
+        t_si_arr = self._time_since_infall_interp(z_arr)
+        log10f   = np.vectorize(self._tidal_model)(np.log10(c_arr), t_si_arr, self.chost)
+        f_arr    = 10**log10f
+
+        mask = masses * f_arr >= self.bound_mass_cut
+        return dict(
+            m_infall    = jnp.array(masses[mask]),
+            c_infall    = jnp.array(c_arr[mask]),
+            z_infall    = jnp.array(z_arr[mask]),
+            f_bound     = jnp.array(f_arr[mask]),
+            N_surviving = jnp.array(int(mask.sum())),
         )

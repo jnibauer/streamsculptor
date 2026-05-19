@@ -10,6 +10,8 @@ import astropy.units as u
 from streamsculptor import JaxCoords as jc
 import interpax
 
+from streamsculptor.streamhelpers import compute_length_oscillations
+
 jax.config.update("jax_enable_x64", True)
 sigma_val = (180 * u.km / u.s).to(u.kpc / u.Myr).value
 
@@ -30,6 +32,7 @@ class RateCalculator(eqx.Module):
     alpha: jnp.ndarray
     r_minus2: jnp.ndarray
     disk_factor: jnp.ndarray
+    length_osc: dict = None
 
     def __init__(self,
                  orbit,
@@ -42,7 +45,11 @@ class RateCalculator(eqx.Module):
                  m0=2.52e7,       # Msun
                  alpha=0.678,
                  r_minus2=162.4,  # kpc
-                 disk_factor=1.0  # Disk suppresses number of subhalos by factor of 3 in Erkal+2016
+                 disk_factor=1.0,  # Disk suppresses number of subhalos by factor of 3 in Erkal+2016
+                 prog_today = None,
+                 first_strip_lead = None,
+                 first_strip_trail = None,
+                 pot = None,
                 ):
         
         self.orbital_r = jnp.sqrt(jnp.sum(orbit.ys[:, 0:3]**2, axis=1))
@@ -59,6 +66,23 @@ class RateCalculator(eqx.Module):
         self.alpha = jnp.asarray(alpha)
         self.r_minus2 = jnp.asarray(r_minus2)
         self.disk_factor = jnp.asarray(disk_factor)
+
+        if prog_today is not None and first_strip_lead is not None and first_strip_trail is not None and pot is not None and t_age is not None:
+            #self.prog_today = prog_today
+            #self.first_strip_lead = first_strip_lead # at observation time
+            #self.first_strip_trail = first_strip_trail # at observation time
+            #self.pot = pot
+            self.length_osc = compute_length_oscillations(prog_today=prog_today, 
+                                                          first_stripped_lead=first_strip_lead, 
+                                                          first_stripped_trail=first_strip_trail, 
+                                                          pot=pot, 
+                                                          t_age=t_age,
+                                                          length_today=self.l_obs)
+        
+        
+
+
+
 
     @eqx.filter_jit
     def r_s_func(self, log10M, concentration_fac=1.0):
@@ -124,6 +148,30 @@ class RateCalculator(eqx.Module):
         return trapezoid(y=integrand, x=self.orbit_ts, axis=0) * prefac * normalization
 
     @eqx.filter_jit
+    def dN_encounter_dlog10M_general(self, log10M: jnp.array, b_max_func: callable, normalization=1.0, slope=-1.9, concentration_fac=1.0, gamma=2.7, M_hm=0.0, beta=0.99, linear_growth=False):
+        """
+        Generalized version of dN_encounter_dlog10M that incorporates stream length oscillations.
+        Takes a function b_max_func that can depend on log10M and returns b_max. 
+        log10M: a single input mass. Use vmap to vectorize over many masses
+        """
+        dn_dlog10M_val = self.dn_dlog10M(log10M=log10M, r=self.orbital_r, slope=slope, gamma=gamma, beta=beta, M_hm=M_hm)
+        b_max = b_max_func(log10M)
+        
+        length_osc_ts = self.length_osc['ts'] # this goes from e.g. -3000 Myr to 0
+        length_osc_flip = jnp.flip(jnp.abs(length_osc_ts)) # this goes from 0 to 3000 Myr, and is the same length as legnth_osc_ts
+        # interpolate this over the orbit times to get length as a function of time
+        if linear_growth:
+             l_of_t = self.l_obs * (self.orbit_ts / self.t_age)
+        else:
+            l_of_t = jnp.interp(self.orbit_ts, length_osc_flip, self.length_osc['length_func']) # same length as self.orbit_ts
+        integrand = l_of_t * dn_dlog10M_val
+        prefac = jnp.sqrt(2 * jnp.pi) * self.sigma * self.disk_factor * b_max 
+        integral = trapezoid(y=integrand, x=self.orbit_ts) * prefac * normalization
+        return integral
+
+
+
+    @eqx.filter_jit
     def N_encounter(self, log10M_min, log10M_max, normalization=1.0, slope=-1.9, concentration_fac=1.0, gamma=2.7, M_hm=0.0, beta=0.99):
         """
         Number of encounters with subhalos in the mass range [M_min, M_max].
@@ -135,6 +183,20 @@ class RateCalculator(eqx.Module):
         dN_encounter_dlog10M_eval = jax.vmap(dN_encounter_dlog10M_func)(log10_m_arr)
         mass_integral = trapezoid(y=dN_encounter_dlog10M_eval, x=log10_m_arr)
         return mass_integral 
+
+    
+    @eqx.filter_jit
+    def N_encounter_general(self, log10M_min, log10M_max, b_max_func, normalization=1.0, slope=-1.9, concentration_fac=1.0, gamma=2.7, M_hm=0.0, beta=0.99,linear_growth=False):
+        """
+        Generalized version of N_encounter that incorporates stream length oscillations.
+        Takes a function b_max_func that can depend on log10M and returns b_max. 
+        Integrates dN_encounter_dlog10M_general over the mass range. 
+        """
+        log10_m_arr = jnp.linspace(log10M_min, log10M_max, 1000)
+        dN_encounter_dlog10M_func = lambda m: self.dN_encounter_dlog10M_general(log10M=m, b_max_func=b_max_func, normalization=normalization, slope=slope, concentration_fac=concentration_fac, gamma=gamma, beta=beta, M_hm=M_hm,linear_growth=linear_growth)
+        dN_encounter_dlog10M_eval = jax.vmap(dN_encounter_dlog10M_func)(log10_m_arr)
+        mass_integral = trapezoid(y=dN_encounter_dlog10M_eval, x=log10_m_arr)
+        return mass_integral
 
     @eqx.filter_jit
     def sample_masses(self, log10M_min, log10M_max, key, normalization=1.0, slope=-1.9, concentration_fac=1.0, gamma=2.7, M_hm=0.0, beta=0.99, array_length=1_000):
@@ -159,6 +221,35 @@ class RateCalculator(eqx.Module):
         idx = jnp.arange(array_length)
         # Pad the unused array elements with 0 based on the sampled N_encounter
         return dict(log10_mass=jnp.where(idx >= N_encounter, 0.0, samps), N_encounter=N_encounter, N_encounter_rate=N_encounter_rate)
+
+
+    @eqx.filter_jit
+    def sample_masses_general(self, log10M_min, log10M_max, b_max_func, key, normalization=1.0, slope=-1.9, concentration_fac=1.0, gamma=2.7, M_hm=0.0, beta=0.99, array_length=1_000,linear_growth=False):
+        """
+        Sample masses of subhalos from the mass function.
+        Utilizes dN_encounter_dlog10M_general, which integrates
+        the product of the stream's length and dn/dlog10M over time, incporporating 
+        stream length oscillations. 
+        b_max_func: a function that takes log10M and returns b_max. 
+        """
+        key1, key2 = random.split(key, 2)
+        N_encounter_rate = self.N_encounter_general(log10M_min=log10M_min, log10M_max=log10M_max, b_max_func=b_max_func, normalization=normalization, slope=slope, concentration_fac=concentration_fac, gamma=gamma, beta=beta, M_hm=M_hm, linear_growth=linear_growth)
+        N_encounter = jax.random.poisson(key1, N_encounter_rate)
+
+        # Dense array that we will resample from
+        log10_M_arr = jnp.linspace(log10M_min, log10M_max, 5_000)
+        dN_dlog10M_func = lambda m: self.dN_encounter_dlog10M_general(log10M=m, b_max_func=b_max_func, normalization=normalization, slope=slope, concentration_fac=concentration_fac, gamma=gamma, beta=beta, M_hm=M_hm,linear_growth=linear_growth)
+        dNenc_dlog10M = jax.vmap(dN_dlog10M_func)(log10_M_arr)
+
+        dlog10M = log10_M_arr[1] - log10_M_arr[0]
+        prob = dNenc_dlog10M * dlog10M / jnp.sum(dNenc_dlog10M * dlog10M)
+        prob = prob / jnp.sum(prob)
+
+        samps = jax.random.choice(a=log10_M_arr, p=prob, shape=(array_length,), key=key2)
+        idx = jnp.arange(array_length)
+        # Pad the unused array elements with 0 based on the sampled N_encounter
+        return dict(log10_mass=jnp.where(idx >= N_encounter, 0.0, samps), N_encounter=N_encounter, N_encounter_rate=N_encounter_rate)
+
 
     @eqx.filter_jit
     def compute_N_enclosed(self, log10M_min, log10M_max, r_min, r_max, slope=-1.9, gamma=2.7, M_hm=0.0, beta=0.99):

@@ -428,12 +428,14 @@ class PowerLawCutoffPotential(Potential):
     m: float
     alpha: float
     r_c: float
+    phi_inf: float
 
     def __init__(self, m, alpha, r_c, units=usys):
         super().__init__(units)
         self.m = m
         self.alpha = alpha
         self.r_c = r_c
+        self.phi_inf = (self.units.G * self.m / self.r_c) * (special.gamma(1 - 0.5*self.alpha) / special.gamma(1.5 - 0.5*self.alpha))
 
     def potential(self, xyz, t):
         r = jnp.sqrt(jnp.sum(xyz**2))
@@ -444,8 +446,9 @@ class PowerLawCutoffPotential(Potential):
         tmp_4 = tmp_3 / self.r_c**2
         tmp_5 = self.units.G * self.m
         tmp_6 = tmp_5 * special.gammainc(tmp_2, tmp_4) * special.gamma(tmp_2) / (jnp.sqrt(tmp_3) * special.gamma(tmp_1 + 2.5))
-        return tmp_0 * tmp_6 - 3./2.0 * tmp_6 + tmp_5 * special.gammainc(tmp_1 + 1, tmp_4) * special.gamma(tmp_1 + 1) / (self.r_c * special.gamma(tmp_2))
-    
+        pot_galpy =  tmp_0 * tmp_6 - 3./2.0 * tmp_6 + tmp_5 * special.gammainc(tmp_1 + 1, tmp_4) * special.gamma(tmp_1 + 1) / (self.r_c * special.gamma(tmp_2))
+        # note galpy powerlawcutoff uses Phi(0)=0 so Phi(inf) is a positive constant. Gauge shift so that Phi(inf) = 0
+        return pot_galpy - self.phi_inf
     def gradient(self, xyz, t):
         r = jnp.sqrt(jnp.sum(xyz**2))
         dPhi_dr = (self.units.G * self.m / (r**2) * special.gammainc(0.5 * (3 - self.alpha), r*r / (self.r_c * self.r_c)))

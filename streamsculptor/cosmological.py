@@ -795,6 +795,36 @@ class ImpactRates:
         """
         return float(self.model.normalization) * float(self.amplitude)
 
+    def fsub(self, M_vir=1e12, r_vir=300.0, log10M_min=None, log10M_max=None):
+        """
+        Fraction of ``M_vir`` bound in subhalos inside ``r_vir`` under this dark matter
+        model.
+
+        Uses ``self.normalization``, so the pyHalo survival amplitude is included: if
+        scaling the concentrations makes twice as many subhalos survive, this reports
+        twice the mass. The model's ``slope`` and WDM parameters enter the integral too.
+
+        Defaults to the population's ``log10M_bound_range`` -- the window impacts are
+        actually simulated for -- so this answers "what fraction of the halo is in the
+        subhalos I am modeling". That is a smaller number than a cosmologist's fsub,
+        which would run to 1e10 Msun and beyond. Pass ``log10M_min``/``log10M_max``
+        explicitly to widen it, remembering the integrand is flat per dex and so the
+        result is dominated by whatever upper limit you choose.
+
+        Caveat worth knowing: the Galacticus tidal calibration behind the survival
+        amplitude is only valid inside ``rmax`` (30 kpc by default), so integrating out
+        to a 300 kpc virial radius extrapolates that amplitude well past where it was
+        calibrated. The Erkal+2016 radial profile itself is fine out there.
+        """
+        lo, hi = self.log10M_bound_range
+        m = self.model
+        return float(self.engine.fsub(
+            normalization=self.normalization, M_vir=M_vir, r_vir=r_vir,
+            log10M_min=lo if log10M_min is None else log10M_min,
+            log10M_max=hi if log10M_max is None else log10M_max,
+            slope=m.slope, gamma=m.gamma, M_hm=m.M_hm, beta=m.beta,
+        ))
+
     def _engine_kwargs(self):
         m = self.model
         return dict(normalization=self.normalization, slope=m.slope,

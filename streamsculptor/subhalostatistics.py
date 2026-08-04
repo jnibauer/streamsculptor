@@ -15,6 +15,60 @@ from streamsculptor.streamhelpers import compute_length_oscillations
 jax.config.update("jax_enable_x64", True)
 sigma_val = (180 * u.km / u.s).to(u.kpc / u.Myr).value
 
+@eqx.filter_jit
+def shmf_moment(log10M_min, log10M_max, r_max, r_min=1e-3,
+                c0=2.02e-13, m0=2.52e7, alpha=0.678, r_minus2=162.4,
+                slope=-1.9, gamma=2.7, M_hm=0.0, beta=0.99,
+                mass_weighted=False, n_m=101, n_r=100):
+    """
+    Number (or mass) of subhalos inside r_max over a mass window, at normalization=1.
+
+        int dlog10M int dr 4 pi r^2 (dn/dlog10M)(r, M) [* M if mass_weighted]
+
+    Returns Msun if mass_weighted, else a count. Free function rather than a method
+    because this depends only on the SHMF and the radial profile -- not on the orbit,
+    stream age or length -- so it should not require a constructed RateCalculator.
+
+    dn/dlog10M factorizes into a mass part and a radial part, so this is two 1D
+    integrals rather than a 2D grid. Note a0 cancels out of (c0/a0) * dN/dlog10M and
+    so does not appear here.
+
+    r_min defaults to 1e-3 rather than 0: r**alpha has an infinite derivative at the
+    origin, and this needs to stay differentiable.
+    """
+    log10M = jnp.linspace(log10M_min, log10M_max, n_m)
+    M = 10.0 ** log10M
+    wdm_fac = (1.0 + gamma * (M_hm / M)) ** (-beta)
+    dn_dlog10M = c0 * (M / m0) ** slope * M * jnp.log(10.0) * wdm_fac
+    if mass_weighted:
+        dn_dlog10M = dn_dlog10M * M
+    mass_integral = trapezoid(y=dn_dlog10M, x=log10M)
+
+    r = jnp.linspace(r_min, r_max, n_r)
+    spatial = jnp.exp(-(2.0 / alpha) * ((r / r_minus2) ** alpha - 1.0))
+    volume_integral = trapezoid(y=4.0 * jnp.pi * r**2 * spatial, x=r)
+
+    return mass_integral * volume_integral
+
+
+def fsub_from_normalization(normalization=1.0, M_vir=1e12, r_vir=300.0,
+                            log10M_min=5.0, log10M_max=10.0, **shmf_kwargs):
+    """
+    Fraction of M_vir bound in subhalos inside r_vir, over [log10M_min, log10M_max].
+
+    fsub is meaningless without its window. dN/dlog10M ~ M^-0.9 makes the mass
+    integrand ~M^+0.1 -- flat per dex, so the answer is dominated by log10M_max and
+    scales roughly as 0.024 per dex at the Erkal+2016 normalization. For reference,
+    normalization=1 gives fsub = 0.121 over 1e5-1e10 Msun within 300 kpc, and 0.024
+    within 100 kpc.
+
+    See shmf_moment for the SHMF and radial-profile parameters.
+    """
+    M_sub = shmf_moment(log10M_min, log10M_max, r_vir, mass_weighted=True,
+                        **shmf_kwargs)
+    return normalization * M_sub / M_vir
+
+
 class RateCalculator(eqx.Module):
     """
     Class to sample subhalo impacts from SHMF given formalism from Yoon+2011, Erkal+2016.
@@ -254,22 +308,40 @@ class RateCalculator(eqx.Module):
         return dict(log10_mass=jnp.where(idx >= N_encounter, 0.0, samps), N_encounter=N_encounter, N_encounter_rate=N_encounter_rate)
 
 
+    def _shmf_params(self):
+        """This calculator's SHMF and radial-profile parameters, for shmf_moment."""
+        return dict(c0=self.c0, m0=self.m0, alpha=self.alpha, r_minus2=self.r_minus2)
+
     @eqx.filter_jit
     def compute_N_enclosed(self, log10M_min, log10M_max, r_min, r_max, slope=-1.9, gamma=2.7, M_hm=0.0, beta=0.99):
         """
         Compute the total number of subhalos in a given range of radii and masses.
         """
-        log10mass_arr = jnp.linspace(log10M_min, log10M_max, 101)
-        r_arr = jnp.linspace(r_min, r_max, 100)
-        log10_M, R = jnp.meshgrid(log10mass_arr, r_arr, indexing='ij')
+        return shmf_moment(log10M_min, log10M_max, r_max, r_min=r_min,
+                           slope=slope, gamma=gamma, M_hm=M_hm, beta=beta,
+                           mass_weighted=False, **self._shmf_params())
 
-        func_map = lambda r_val, m_val: self.dn_dlog10M(r_val, m_val, slope=slope, gamma=gamma, M_hm=M_hm, beta=beta)
-        inp = jax.vmap(func_map)(R.ravel(), log10_M.ravel()).reshape(R.shape)
-        inp = inp * 4 * jnp.pi * R**2
+    @eqx.filter_jit
+    def compute_M_enclosed(self, log10M_min, log10M_max, r_min, r_max, slope=-1.9, gamma=2.7, M_hm=0.0, beta=0.99):
+        """
+        Total mass bound in subhalos in a given range of radii and masses [Msun],
+        at normalization=1.
+        """
+        return shmf_moment(log10M_min, log10M_max, r_max, r_min=r_min,
+                           slope=slope, gamma=gamma, M_hm=M_hm, beta=beta,
+                           mass_weighted=True, **self._shmf_params())
 
-        I1 = trapezoid(y=inp, x=log10mass_arr, axis=0)
-        I2 = trapezoid(y=I1, x=r_arr)
-        return I2
+    @eqx.filter_jit
+    def fsub(self, normalization=1.0, M_vir=1e12, r_vir=300.0, log10M_min=5.0,
+             log10M_max=10.0, slope=-1.9, gamma=2.7, M_hm=0.0, beta=0.99):
+        """
+        Fraction of M_vir bound in subhalos inside r_vir, for a given SHMF
+        normalization. See fsub_from_normalization for the window caveat.
+        """
+        return fsub_from_normalization(
+            normalization=normalization, M_vir=M_vir, r_vir=r_vir,
+            log10M_min=log10M_min, log10M_max=log10M_max,
+            slope=slope, gamma=gamma, M_hm=M_hm, beta=beta, **self._shmf_params())
 
 
 class TNFWSampler:

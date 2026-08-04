@@ -305,6 +305,7 @@ class TNFWSampler:
                  log10M_low=6.0,
                  log10M_high=10.0,
                  slope=1.9,
+                 concentration_fac=1.0,
                  bound_mass_cut=1e6):
 
         try:
@@ -330,6 +331,7 @@ class TNFWSampler:
         self.log10M_high = log10M_high
         self.slope = slope
         self.bound_mass_cut = bound_mass_cut
+        self.concentration_fac = concentration_fac
 
         self._tidal_model = InterpGalacticusMW(rmax=30.0)
         self._infall_dist = InfallDistributionDirectMilkyWay30kpc(z_eval, logM_host)
@@ -386,7 +388,7 @@ class TNFWSampler:
 
         for m in iterator:
             z              = self._infall_dist(m)
-            c              = self._concentration_model.nfw_concentration(m, z)
+            c              = self._concentration_model.nfw_concentration(m, z) * self.concentration_fac
             t_since_infall = self._time_since_infall_interp(z)
             log10_fbound   = self._tidal_model(np.log10(c), t_since_infall, self.chost)
             f              = 10**log10_fbound

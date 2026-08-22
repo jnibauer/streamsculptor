@@ -304,11 +304,19 @@ def gen_stream_ics_pert_Chen25(pot_base=None, pot_pert=None, ts=None, prog_w0=No
 def gen_stream_vmapped_Chen25(pot_base: callable, ts: jnp.array, prog_w0: jnp.array, Msat: float, key: jax.random.PRNGKey, solver=diffrax.Dopri5(scan_kind='bounded'), rtol=1e-7, atol=1e-7, dtmin=0.3, dtmax=None, max_steps=10_000, throw=False, prog_pot=potential.PlummerPotential(m=0.0, r_s=1.0,units=usys)):
     stream_ics, orb_fwd = gen_stream_ics_Chen25(pot_base=pot_base, ts=ts, prog_w0=prog_w0, Msat=Msat, key=key, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax, max_steps=max_steps)
     pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = stream_ics
-    
-    prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
-    prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
-    pot_tot = potential.Potential_Combine(potential_list=[pot_base, prog_pot_translating], units=usys)
-    
+
+    # Add progenitor self-gravity only if a massive prog_pot was supplied. With the default
+    # (massless PlummerPotential), the translating potential contributes zero force but still
+    # evaluates the progenitor-orbit spline for every particle at every stage -- pure waste.
+    # Msat is unrelated: it sizes the spray ICs (tidal radius etc), not the self-gravity term.
+    self_grav = not (hasattr(prog_pot, "m") and float(prog_pot.m) == 0.0)
+    if self_grav:
+        prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
+        prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
+        pot_tot = potential.Potential_Combine(potential_list=[pot_base, prog_pot_translating], units=usys)
+    else:
+        pot_tot = pot_base
+
     orb_integrator = lambda w0, t_arr: pot_tot.integrate_orbit(w0=w0, ts=t_arr, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin,dtmax=dtmax,max_steps=max_steps, throw=throw).ys[-1]
     orb_integrator_mapped = jax.vmap(orb_integrator, in_axes=(0, None))
     

@@ -1,4 +1,5 @@
 from functools import partial
+import numpy as np
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -323,6 +324,196 @@ def gen_stream_vmapped_Chen25(pot_base: callable, ts: jnp.array, prog_w0: jnp.ar
     
     particle_ids = jnp.arange(len(pos_close_arr)-1)
     return jax.vmap(single_particle_integrate, in_axes=(0,0,0,0,0))(particle_ids, pos_close_arr[:-1], pos_far_arr[:-1], vel_close_arr[:-1], vel_far_arr[:-1])
+
+
+# =============================================================================
+# Active-set integrator (drop finished particles as you go) + gen_stream_Chen25
+# =============================================================================
+#
+# Stream particles are released across the whole integration span, so their
+# integration *durations* differ enormously (a particle stripped early runs the
+# full time; one stripped near the present runs almost none). Under jax.vmap all
+# particles share one while_loop and run until the SLOWEST finishes -> cost scales
+# with the MAX duration. agama loops per particle in C and stops each at its own
+# present day -> cost scales with the MEAN duration. This integrator recovers the
+# mean-cost behaviour inside JAX: it steps the whole batch at once (SIMD), and a
+# host-side loop drops particles that have reached the present between K-step
+# chunks and relaunches on the shrinking active set.
+#
+# IMPORTANT: this is a host-orchestrated eager loop (Python while + numpy gather +
+# block_until_ready). It is forward-only and NOT jax.grad / jit / vmap / scan able.
+# Use it to GENERATE streams fast on a single CPU thread; for gradients (HMC, MLE,
+# Fisher) or on GPU, use gen_stream_vmapped_Chen25.
+
+def _extract_erk_tableau(solver):
+    """Pull the Butcher tableau of any explicit adaptive RK (Dopri5/Dopri8/Tsit5...)."""
+    tab  = solver.tableau
+    S    = int(np.asarray(tab.b_sol).shape[0])                       # number of stages
+    A    = [jnp.asarray(np.asarray(r, float)) for r in tab.a_lower]  # rows of length 1..S-1
+    BSOL = jnp.asarray(np.asarray(tab.b_sol,   float))
+    BERR = jnp.asarray(np.asarray(tab.b_error, float))
+    C    = jnp.asarray(np.concatenate([[0.0], np.asarray(tab.c, float)]))  # stage nodes, length S
+    return S, A, BSOL, BERR, C
+
+
+# Compiled K-step chunk steppers, cached across calls. Keyed only by the STATIC
+# structure (solver type, chunk size, tolerances) — the potential and end-time are
+# passed as traced arguments, so jit compiles once per (key, batch shape, potential
+# structure) and reuses that across chunks, across calls, and across potential
+# parameter values. Building a fresh jit per call instead makes every call recompile.
+_ACTIVESET_CHUNK_CACHE = {}
+
+def _get_activeset_chunk(solver, K, rtol, atol):
+    key = (type(solver).__name__, int(K), float(rtol), float(atol))
+    if key not in _ACTIVESET_CHUNK_CACHE:
+        S, A, BSOL, BERR, C = _extract_erk_tableau(solver)
+        EXPO = 1.0 / float(solver.error_order(diffrax.ODETerm(lambda t, y, a: y)))
+
+        def eom(pot, t, y):
+            return jnp.hstack([y[3:], pot.acceleration(y[:3], t)])
+
+        def step_one(pot, y, t, h):
+            ks = [eom(pot, t, y)]
+            for i in range(1, S):
+                ai = A[i-1]; inc = ai[0] * ks[0]
+                for j in range(1, i):
+                    inc = inc + ai[j] * ks[j]
+                ks.append(eom(pot, t + C[i] * h, y + h * inc))
+            ynew = y + h * sum(BSOL[i] * ks[i] for i in range(S))
+            errv = h * sum(BERR[i] * ks[i] for i in range(S))
+            sc   = atol + rtol * jnp.maximum(jnp.abs(y), jnp.abs(ynew))
+            errn = jnp.sqrt(jnp.mean((errv / sc) ** 2))
+            return ynew, errn
+        vstep = jax.vmap(step_one, in_axes=(None, 0, 0, 0))
+
+        def attempt(pot, Y, T, DT, t_final):
+            dtc = jnp.minimum(DT, t_final - T)                      # never overshoot t_final
+            ynew, errn = vstep(pot, Y, T, dtc)
+            errn = jnp.maximum(errn, 1e-16)
+            acc  = errn <= 1.0
+            Tn   = jnp.where(acc, T + dtc, T)
+            Yn   = jnp.where(acc[:, None], ynew, Y)
+            DTn  = DT * jnp.clip(0.9 * errn ** (-EXPO), 0.2, 10.0)
+            return Yn, Tn, DTn
+
+        @eqx.filter_jit   # filter_jit: array leaves traced, non-array leaves (e.g. a spline's
+        def chunk(pot, Y, T, DT, t_final):   # method='cubic' string) treated as static
+            def cond(c): Y, T, DT, i = c; return jnp.logical_and(i < K, jnp.any(T < t_final))
+            def body(c): Y, T, DT, i = c; Y, T, DT = attempt(pot, Y, T, DT, t_final); return (Y, T, DT, i + 1)
+            Y, T, DT, _ = jax.lax.while_loop(cond, body, (Y, T, DT, 0))
+            return Y, T, DT
+        _ACTIVESET_CHUNK_CACHE[key] = chunk
+    return _ACTIVESET_CHUNK_CACHE[key]
+
+
+def make_activeset_integrator(pot, t_final, solver=diffrax.Dopri8(), rtol=1e-7, atol=1e-7, K=120,
+                              max_steps=10_000):
+    """Build a forward active-set integrator for `pot` up to common time `t_final`.
+
+    Returns integrate(Y0, T0) -> (M, 6): integrate each particle from its own start
+    time T0[i] to t_final, keeping only the final state. `pot` may be time-dependent
+    (its .acceleration(x, t) is evaluated at the correct stage times). Non-differentiable.
+    The compiled chunk stepper is cached and reused across calls (see _get_activeset_chunk).
+
+    `max_steps` caps the number of steps any particle may take (mirrors diffrax): a
+    particle that has not reached t_final within max_steps is returned at its current,
+    unconverged state and a warning is emitted. This also guards against an infinite host
+    loop on a stiff particle whose step size collapses toward zero.
+    """
+    chunk = _get_activeset_chunk(solver, K, rtol, atol)
+    tf = jnp.asarray(float(t_final))
+    max_chunks = max(1, int(np.ceil(max_steps / K)))
+
+    def _nextpow2(n):
+        p = 1
+        while p < n: p *= 2
+        return p
+
+    def integrate(Y0, T0):
+        Y0 = jnp.asarray(Y0); T0 = jnp.asarray(T0); M, D = Y0.shape
+        Yc = Y0; Tc = T0; DTc = jnp.ones(M) * 10.0
+        idx = np.arange(M); out = np.zeros((M, D))
+        for _chunk_i in range(max_chunks):
+            if idx.size == 0:
+                break
+            n = idx.size; pad = _nextpow2(n) - n
+            if pad:
+                # pad by duplicating a live particle (finite position for any potential),
+                # marked already-finished so it never contributes work
+                Yp  = jnp.concatenate([Yc, jnp.repeat(Yc[:1], pad, 0)], 0)
+                Tp  = jnp.concatenate([Tc, jnp.full(pad, float(t_final))])
+                DTp = jnp.concatenate([DTc, jnp.ones(pad)])
+            else:
+                Yp, Tp, DTp = Yc, Tc, DTc
+            Yp, Tp, DTp = jax.block_until_ready(chunk(pot, Yp, Tp, DTp, tf))
+            Tn = np.array(Tp[:n]); Yn = np.array(Yp[:n]); done = Tn >= float(t_final)
+            out[idx[done]] = Yn[done]; keep = ~done; idx = idx[keep]
+            Yc  = jnp.asarray(Yn[keep]); Tc = jnp.asarray(Tn[keep])
+            DTc = jnp.asarray(np.array(DTp[:n])[keep])
+        if idx.size > 0:
+            # hit the max_steps cap before reaching t_final (stiff particles): return their
+            # current unconverged state, as diffrax would with throw=False, and warn.
+            import warnings
+            warnings.warn(f"active-set integrator: {idx.size} particle(s) did not reach t_final "
+                          f"within max_steps={max_steps}; returning their current state. "
+                          f"Tighten max_steps or the tolerances.", RuntimeWarning)
+            out[idx] = np.array(Yc)
+        return out
+    return integrate
+
+
+def gen_stream_Chen25(pot_base, ts, prog_w0, Msat, key, solver=diffrax.Dopri8(),
+                      rtol=1e-7, atol=1e-7, dtmin=0.3, dtmax=None, max_steps=10_000, K=120,
+                      prog_pot=potential.PlummerPotential(m=0.0, r_s=1.0, units=usys), throw=False,
+                      method="auto"):
+    """Generate a Chen+25 particle-spray stream; returns (lead, trail) present-day states.
+
+    `method` selects how the released particles are integrated:
+      - "auto" (default): the fast forward active-set integrator on CPU (drops finished
+        particles as they reach the present; single-thread, non-differentiable), and the
+        vmapped path on GPU.
+      - "vmap": always use gen_stream_vmapped_Chen25 (differentiable; use this for
+        gradients / HMC / MLE / Fisher, or on GPU).
+      - "activeset": always use the active-set integrator (non-differentiable), even on GPU.
+
+    Output matches gen_stream_vmapped_Chen25 in either case.
+    """
+    if method not in ("auto", "vmap", "activeset"):
+        raise ValueError(f"method must be 'auto', 'vmap', or 'activeset'; got {method!r}")
+    use_vmap = (method == "vmap") or (method == "auto" and jax.default_backend() != "cpu")
+    if use_vmap:
+        return gen_stream_vmapped_Chen25(pot_base=pot_base, ts=ts, prog_w0=prog_w0, Msat=Msat,
+            key=key, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax,
+            max_steps=max_steps, throw=throw, prog_pot=prog_pot)
+
+    # --- active-set path ---
+    stream_ics, orb_fwd = gen_stream_ics_Chen25(pot_base=pot_base, ts=ts, prog_w0=prog_w0,
+        Msat=Msat, key=key, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin,
+        dtmax=dtmax, max_steps=max_steps)
+    pos_close, pos_far, vel_close, vel_far = stream_ics
+
+    # integrate in the base potential, adding progenitor self-gravity only if requested
+    # (a massless prog_pot contributes nothing; skipping its moving-spline eval keeps
+    # the stepper lean, which is the whole point of this path)
+    self_grav = not (hasattr(prog_pot, "m") and float(prog_pot.m) == 0.0)
+    if self_grav:
+        prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:, :3], method="cubic")
+        prog_trans  = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
+        pot_tot     = potential.Potential_Combine(potential_list=[pot_base, prog_trans], units=usys)
+    else:
+        pot_tot = pot_base
+
+    # released particles: leading + trailing from each release point (drop last, matching vmapped)
+    n   = pos_close.shape[0] - 1
+    Y0  = jnp.concatenate([jnp.hstack([pos_close[:-1], vel_close[:-1]]),
+                           jnp.hstack([pos_far[:-1],  vel_far[:-1]])], 0)
+    T0  = jnp.concatenate([ts[:-1], ts[:-1]])
+
+    integrate = make_activeset_integrator(pot_tot, t_final=float(ts[-1]),
+                                          solver=solver, rtol=rtol, atol=atol, K=K, max_steps=max_steps)
+    out = integrate(Y0, T0)
+    return out[:n], out[n:]   # (lead, trail)
+
 
 @eqx.filter_jit
 def gen_stream_vmapped_with_pert_Chen25(pot_base=None, pot_pert=None, prog_pot=potential.PlummerPotential(m=0.0, r_s=1.0,units=usys), ts=None, prog_w0=None, Msat=None, key=None, solver=diffrax.Dopri5(scan_kind='bounded'), max_steps=10_000, rtol=1e-7, atol=1e-7, dtmin=0.1):

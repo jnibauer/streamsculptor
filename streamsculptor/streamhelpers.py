@@ -473,16 +473,23 @@ def make_activeset_integrator(pot, t_final, solver=diffrax.Dopri8(), rtol=1e-7, 
 def gen_stream_Chen25(pot_base, ts, prog_w0, Msat, key, solver=diffrax.Dopri8(),
                       rtol=1e-7, atol=1e-7, dtmin=0.3, dtmax=None, max_steps=10_000, K=120,
                       prog_pot=potential.PlummerPotential(m=0.0, r_s=1.0, units=usys), throw=False,
-                      method="auto"):
+                      method="auto", pot_pert=None):
     """Generate a Chen+25 particle-spray stream; returns (lead, trail) present-day states.
 
     `method` selects how the released particles are integrated:
       - "auto" (default): the fast forward active-set integrator on CPU (drops finished
         particles as they reach the present; single-thread, non-differentiable), and the
         vmapped path on GPU.
-      - "vmap": always use gen_stream_vmapped_Chen25 (differentiable; use this for
+      - "vmap": always use the vmapped path (differentiable; use this for
         gradients / HMC / MLE / Fisher, or on GPU).
       - "activeset": always use the active-set integrator (non-differentiable), even on GPU.
+
+    `pot_pert` (optional): a perturbing potential (e.g. SubhaloLinePotential). When given,
+    the progenitor orbit is integrated in pot_base + pot_pert (so the progenitor feels the
+    impact) and the released particles are integrated in pot_base + pot_pert, BUT the
+    stream-release/tidal conditions are still evaluated in pot_base only -- the smooth tidal
+    field should not feel the subhalo impulse. This matches gen_stream_ics_pert_Chen25 and
+    the gen_stream_vmapped_with_pert_Chen25 path. None (default) -> unperturbed base stream.
 
     Output matches gen_stream_vmapped_Chen25 in either case.
     """
@@ -490,26 +497,40 @@ def gen_stream_Chen25(pot_base, ts, prog_w0, Msat, key, solver=diffrax.Dopri8(),
         raise ValueError(f"method must be 'auto', 'vmap', or 'activeset'; got {method!r}")
     use_vmap = (method == "vmap") or (method == "auto" and jax.default_backend() != "cpu")
     if use_vmap:
+        if pot_pert is not None:
+            return gen_stream_vmapped_with_pert_Chen25(pot_base=pot_base, pot_pert=pot_pert,
+                prog_pot=prog_pot, ts=ts, prog_w0=prog_w0, Msat=Msat, key=key, solver=solver,
+                rtol=rtol, atol=atol, dtmin=dtmin, max_steps=max_steps)
         return gen_stream_vmapped_Chen25(pot_base=pot_base, ts=ts, prog_w0=prog_w0, Msat=Msat,
             key=key, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin, dtmax=dtmax,
             max_steps=max_steps, throw=throw, prog_pot=prog_pot)
 
     # --- active-set path ---
-    stream_ics, orb_fwd = gen_stream_ics_Chen25(pot_base=pot_base, ts=ts, prog_w0=prog_w0,
-        Msat=Msat, key=key, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin,
-        dtmax=dtmax, max_steps=max_steps)
+    # ICs: the release/tidal field is always pot_base (release_model_Chen25 uses pot_base).
+    # With a perturbation, only the progenitor orbit feels pot_base + pot_pert.
+    if pot_pert is None:
+        stream_ics, orb_fwd = gen_stream_ics_Chen25(pot_base=pot_base, ts=ts, prog_w0=prog_w0,
+            Msat=Msat, key=key, solver=solver, rtol=rtol, atol=atol, dtmin=dtmin,
+            dtmax=dtmax, max_steps=max_steps)
+    else:
+        stream_ics, orb_fwd = gen_stream_ics_pert_Chen25(pot_base=pot_base, pot_pert=pot_pert,
+            ts=ts, prog_w0=prog_w0, Msat=Msat, key=key, solver=solver, rtol=rtol, atol=atol,
+            dtmin=dtmin, dtmax=dtmax, max_steps=max_steps)
     pos_close, pos_far, vel_close, vel_far = stream_ics
 
-    # integrate in the base potential, adding progenitor self-gravity only if requested
-    # (a massless prog_pot contributes nothing; skipping its moving-spline eval keeps
-    # the stepper lean, which is the whole point of this path)
+    # integrate the released particles in the base potential (+ perturbation if supplied),
+    # adding progenitor self-gravity only if requested (a massless prog_pot contributes
+    # nothing; skipping its moving-spline eval keeps the stepper lean).
     self_grav = not (hasattr(prog_pot, "m") and float(prog_pot.m) == 0.0)
+    pot_list = [pot_base] if pot_pert is None else [pot_base, pot_pert]
     if self_grav:
         prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:, :3], method="cubic")
         prog_trans  = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
-        pot_tot     = potential.Potential_Combine(potential_list=[pot_base, prog_trans], units=usys)
-    else:
+        pot_list = pot_list + [prog_trans]
+    if len(pot_list) == 1:
         pot_tot = pot_base
+    else:
+        pot_tot = potential.Potential_Combine(potential_list=pot_list, units=usys)
 
     # released particles: leading + trailing from each release point (drop last, matching vmapped)
     n   = pos_close.shape[0] - 1
@@ -527,24 +548,32 @@ def gen_stream_Chen25(pot_base, ts, prog_w0, Msat, key, solver=diffrax.Dopri8(),
 def gen_stream_vmapped_with_pert_Chen25(pot_base=None, pot_pert=None, prog_pot=potential.PlummerPotential(m=0.0, r_s=1.0,units=usys), ts=None, prog_w0=None, Msat=None, key=None, solver=diffrax.Dopri5(scan_kind='bounded'), max_steps=10_000, rtol=1e-7, atol=1e-7, dtmin=0.1):
     stream_ics, orb_fwd = gen_stream_ics_pert_Chen25(pot_base=pot_base, pot_pert=pot_pert, ts=ts, prog_w0=prog_w0, Msat=Msat, key=key, solver=solver,max_steps=max_steps,rtol=rtol,atol=atol,dtmin=dtmin)
     pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = stream_ics
-    
-    prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
-    prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
-    pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_pert, prog_pot_translating], units=usys)
-    
+
+    # Only build+evaluate the progenitor self-gravity spline when a massive prog_pot is
+    # supplied. With the default massless PlummerPotential the translating potential adds
+    # zero force but still evaluates the spline for every particle at every stage -- pure
+    # waste. (Same guard as gen_stream_vmapped_Chen25.)
+    self_grav = not (hasattr(prog_pot, "m") and float(prog_pot.m) == 0.0)
+    if self_grav:
+        prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
+        prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
+        pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_pert, prog_pot_translating], units=usys)
+    else:
+        pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_pert], units=usys)
+
     orb_integrator = lambda w0, t_arr: pot_total.integrate_orbit(w0=w0, ts=t_arr, solver=solver,max_steps=max_steps, rtol=rtol, atol=atol, dtmin=dtmin).ys[-1]
     orb_integrator_mapped = jax.vmap(orb_integrator, in_axes=(0, None))
-    
+
     def single_particle_integrate(particle_number, pos_close_curr, pos_far_curr, vel_close_curr, vel_far_curr):
         curr_particle_w0_close = jnp.hstack([pos_close_curr, vel_close_curr])
         curr_particle_w0_far = jnp.hstack([pos_far_curr, vel_far_curr])
         ts_arr = jnp.array([ts[particle_number], ts[-1]])
-        
+
         curr_particle_loc = jnp.vstack([curr_particle_w0_close, curr_particle_w0_far])
         w_particle = orb_integrator_mapped(curr_particle_loc, ts_arr)
 
         return w_particle[0], w_particle[1]
-    
+
     particle_ids = jnp.arange(len(pos_close_arr)-1)
     return jax.vmap(single_particle_integrate, in_axes=(0,0,0,0,0))(particle_ids, pos_close_arr[:-1], pos_far_arr[:-1], vel_close_arr[:-1], vel_far_arr[:-1])
 
@@ -552,10 +581,14 @@ def gen_stream_vmapped_with_pert_Chen25(pot_base=None, pot_pert=None, prog_pot=p
 def gen_stream_vmapped_with_pert_Chen25_fixed_prog(pot_base=None, pot_pert=None, prog_pot=potential.PlummerPotential(m=0.0, r_s=1.0,units=usys), ts=None, prog_w0=None, Msat=None, key=None, solver=diffrax.Dopri5(scan_kind='bounded'), max_steps=10_000, rtol=1e-7, atol=1e-7, dtmin=0.1):
     stream_ics, orb_fwd = gen_stream_ics_Chen25(pot_base=pot_base, ts=ts, prog_w0=prog_w0, Msat=Msat, key=key, solver=solver,max_steps=max_steps,rtol=rtol,atol=atol,dtmin=dtmin)
     pos_close_arr, pos_far_arr, vel_close_arr, vel_far_arr = stream_ics
-    
-    prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
-    prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
-    pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_pert, prog_pot_translating], units=usys)
+
+    self_grav = not (hasattr(prog_pot, "m") and float(prog_pot.m) == 0.0)
+    if self_grav:
+        prog_spline = interpax.Interpolator1D(x=orb_fwd.ts, f=orb_fwd.ys[:,:3], method='cubic')
+        prog_pot_translating = potential.TimeDepTranslatingPotential(pot=prog_pot, center_spl=prog_spline, units=usys)
+        pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_pert, prog_pot_translating], units=usys)
+    else:
+        pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_pert], units=usys)
     
     orb_integrator = lambda w0, t_arr: pot_total.integrate_orbit(w0=w0, ts=t_arr, solver=solver,max_steps=max_steps, rtol=rtol, atol=atol, dtmin=dtmin).ys[-1]
     orb_integrator_mapped = jax.vmap(orb_integrator, in_axes=(0, None))

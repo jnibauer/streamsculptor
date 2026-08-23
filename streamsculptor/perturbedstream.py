@@ -223,3 +223,132 @@ def gen_perturbed_stream_fardal(
     return dict(leading=l_pert, trailing=t_pert, impactors=out)
 
 
+def gen_perturbed_stream_chen25(
+                            RateCalculator: object,
+                            pot_base: object,
+                            prog_wtoday: jnp.array,
+                            unperturbed_stream: jnp.array,
+                            phi1_unperturbed: jnp.array,
+                            ts: jnp.array,
+                            Msat: float,
+                            log10M_min: float,
+                            log10M_max: float,
+                            subhalo_key: jnp.array,
+                            stream_key: jnp.array,
+                            phi1_bounds: list,
+                            tImpactBounds: list,
+                            phi1_exclude = [1.,1.],
+                            phi1window = 1.,
+                            M_hm= 0.0,
+                            normalization = 1.0,
+                            slope = -1.9,
+                            Max_Num_Impacts = 10,
+                            rtol= 1e-6,
+                            atol= 1e-6,
+                            mass_fac = 1.0,
+                            r_s_fac = 1.0,
+                            solver = diffrax.Dopri8(),
+                            dtmin = 0.05,
+                            max_steps = 5_000,
+                            ):
+    """
+    Chen+25 analog of gen_perturbed_stream_fardal.
+
+    Differs from the Fardal version in TWO ways:
+      1. Uses the Chen+25 particle-spray release model (gen_stream_Chen25, method="vmap").
+      2. Does NOT fix the progenitor. The progenitor is allowed to feel the subhalos:
+         we first backwards-integrate the observed present-day progenitor
+         (prog_wtoday) through pot_base + pot_subhalos to obtain a PERTURBED past IC,
+         then forward-generate the stream in that same combined potential. This keeps
+         the progenitor pinned to its observed position today while letting its whole
+         history respond to the impacts.
+
+    Everything else (subhalo sampling, ImpactGenerator placement using the
+    unperturbed stream track, subhalo potential construction) matches the Fardal path.
+    """
+
+    sample_dict = RateCalculator.sample_masses(log10M_min=log10M_min,
+                                               log10M_max=log10M_max,
+                                               key=subhalo_key,
+                                               M_hm=M_hm,
+                                               normalization=normalization,
+                                               slope=slope,
+                                               array_length=Max_Num_Impacts)
+
+    mass_vals = (10**sample_dict['log10_mass'])*mass_fac
+    mass_vals = jnp.where(sample_dict['log10_mass']>0, mass_vals, 0.0)
+    r_s_vals = 1.05 * jnp.sqrt(mass_vals / 1e8) * r_s_fac
+    r_s_vals  = jnp.where(r_s_vals==0.0, 1.0, r_s_vals)
+    b_high = RateCalculator.b_max_fac * r_s_vals
+    b_low = b_high * 0 + 1e-4  # avoid b=0 for numerical reasons
+    b_bounds = [b_low, b_high]
+
+    key1, key2 = jax.random.split(subhalo_key, 2)
+    seednum = jax.random.randint(key=key1,shape=(1,),minval=0,maxval=10_000)[0]
+    tstrip_stack = jnp.hstack([ts[:-1],ts[:-1]])
+
+    ImpactGen = ImpactGenerator(pot=pot_base,
+                                tobs=ts.max(),
+                                stream=unperturbed_stream,
+                                prog_today = prog_wtoday,
+                                stream_phi1=phi1_unperturbed,
+                                phi1_bounds=phi1_bounds,
+                                tImpactBounds=tImpactBounds,
+                                phi1window=phi1window,
+                                NumImpacts=len(mass_vals),
+                                bImpact_bounds=b_bounds,
+                                stripping_times=tstrip_stack,
+                                phi1_exclude=phi1_exclude,
+                                seednum=seednum)
+
+    ImpactParams = ImpactGen.get_subhalo_ImpactParams()
+    # where nans mask
+    nan_bool =jnp.isnan(ImpactParams['CartesianImpactParams'][:,0])
+    cartImpact = jnp.where(nan_bool[:,None], jnp.ones((1,6))*100, ImpactParams['CartesianImpactParams'])
+    mass_vals = jnp.where(nan_bool, 0.0, mass_vals)
+
+    out = dict(cartImpact=cartImpact,
+                tImpact=ImpactParams['ImpactFrameParams']['tImpact'],
+                mass=mass_vals,
+                r_s=r_s_vals)
+
+    Hernquist = potential.HernquistPotential
+    pot_subhalos = potential.SubhaloLinePotentialCustom_fromFunc(
+                        func=Hernquist,
+                        m=out['mass'],
+                        r_s=out['r_s'],
+                        subhalo_x0=out['cartImpact'][:,:3],
+                        subhalo_v=out['cartImpact'][:,3:],
+                        subhalo_t0=out['tImpact'],
+                        t_window=200.0,
+                        units=pot_base.units)
+
+    # --- Do NOT fix the prog: backwards-integrate the observed present-day prog
+    #     through the FULL (base + subhalo) potential to get a perturbed past IC. ---
+    pot_total = potential.Potential_Combine(potential_list=[pot_base, pot_subhalos], units=pot_base.units)
+    prog_w0_pert = pot_total.integrate_orbit(w0=prog_wtoday,
+                                             t0=ts.max(), t1=ts.min(),
+                                             ts=jnp.array([ts.min()]),
+                                             solver=solver, rtol=rtol, atol=atol,
+                                             dtmin=dtmin, max_steps=max_steps).ys[0]
+
+    # forward-generate the Chen+25 stream from the perturbed IC in base + subhalos.
+    # method="vmap" + pot_pert -> gen_stream_vmapped_with_pert_Chen25, which integrates
+    # the progenitor orbit in pot_base + pot_pert (so the prog feels the impacts).
+    l_pert, t_pert = ssc.gen_stream_Chen25(
+                                    pot_base=pot_base,
+                                    pot_pert=pot_subhalos,
+                                    prog_w0=prog_w0_pert,
+                                    ts=ts,
+                                    Msat=Msat,
+                                    key=stream_key,
+                                    method="vmap",
+                                    solver=solver,
+                                    atol=atol,
+                                    rtol=rtol,
+                                    dtmin=dtmin,
+                                    max_steps=max_steps,
+                                    throw=False,
+                                    )
+
+    return dict(leading=l_pert, trailing=t_pert, impactors=out)

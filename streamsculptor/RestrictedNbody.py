@@ -10,8 +10,7 @@ import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
-import jax.random as random 
-from jax_cosmo.scipy.interpolate import InterpolatedUnivariateSpline
+import jax.random as random
 from diffrax import diffeqsolve, ODETerm, Dopri5,SaveAt,PIDController,DiscreteTerminatingEvent, DirectAdjoint, RecursiveCheckpointAdjoint, ConstantStepSize, Euler, StepTo
 import diffrax
 import equinox as eqx

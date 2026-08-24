@@ -6,7 +6,6 @@ import equinox as eqx
 from quadax import quadgk
 import interpax
 from jax.scipy.interpolate import RegularGridInterpolator
-from jax_cosmo.scipy.interpolate import InterpolatedUnivariateSpline
 import os
 from functools import partial
 from typing import Callable, Any
@@ -177,9 +176,9 @@ class LMCPotential(Potential):
     def __init__(self, LMC_internal, LMC_orbit, units=usys):
         super().__init__(units)
         self.LMC_internal = LMC_internal
-        self.spl_x = InterpolatedUnivariateSpline(LMC_orbit['t'], LMC_orbit['x'], k=3)
-        self.spl_y = InterpolatedUnivariateSpline(LMC_orbit['t'], LMC_orbit['y'], k=3)
-        self.spl_z = InterpolatedUnivariateSpline(LMC_orbit['t'], LMC_orbit['z'], k=3)
+        self.spl_x = interpax.Interpolator1D(LMC_orbit['t'], LMC_orbit['x'], method='cubic', extrap=True)
+        self.spl_y = interpax.Interpolator1D(LMC_orbit['t'], LMC_orbit['y'], method='cubic', extrap=True)
+        self.spl_z = interpax.Interpolator1D(LMC_orbit['t'], LMC_orbit['z'], method='cubic', extrap=True)
 
     def potential(self, xyz, t):
         LMC_pos = jnp.array([self.spl_x(t), self.spl_y(t), self.spl_z(t)])

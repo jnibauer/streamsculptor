@@ -21,7 +21,6 @@ dependencies = [
   "optax>=0.2",
   "quadax>=0.2",
   "tqdm>=4.64",
-  "jax-cosmo>=0.1",
 ]
 
 # Optional dependency groups users can install like: pip install "streamsculptor[agama]"

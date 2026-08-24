@@ -15,7 +15,6 @@ dependencies = [
   "astropy>=6",
   "diffrax>=0.6",
   "equinox>=0.11",
-  "gala>=1.9",
   "interpax>=0.3",
   "jaxopt>=0.8",
   "numpy>=1.26",

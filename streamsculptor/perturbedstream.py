@@ -3,8 +3,6 @@ from functools import partial
 from astropy.constants import G
 import astropy.coordinates as coord
 import astropy.units as u
-# gala
-from gala.units import dimensionless, UnitSystem
 
 import jax
 import jax.numpy as jnp

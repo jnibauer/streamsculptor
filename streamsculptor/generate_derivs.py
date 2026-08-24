@@ -24,18 +24,20 @@ def get_derivs(
                 stream_seednum: int,
                 key: jax.random.PRNGKey,
                 Msat: float,
-                r_s: float,
                 target_num: int,
                 phi1_function: callable, # takes N x 6 --> phi1 (length N)
                 pot: callable,
-                path: str,
+                path: str = None,
+                save: bool = True,
+                r_s: float = 0.2,
                 N_batch: int = 500,
                 atol: float = 1e-11,
                 rtol: float = 1e-11,
-                bmax_fac: float = 10.0,
+                bmax_fac: float = 5.0,
                 phi1window: float = 0.5,
                 N_arm: int = 5_000,
                 save_iter_start: int = 0,
+                self_grav: bool = True,
                 ):
 
     """
@@ -71,8 +73,13 @@ def get_derivs(
         Function that maps a stream (N x 6 array) to phi1 values (length N).
     pot : callable
         Potential object used for the base stream model. Must be compatible with streamsculptor.
-    path : str
-        Directory path where output `.npy` files are saved.
+    path : str, optional
+        Directory path where output `.npy` files are saved. Required when ``save=True``.
+    save : bool, optional
+        If True (default), each batch is written to ``{path}/{i}.npy`` and the function
+        returns None. If False, nothing is written to disk and the function returns a list
+        of the per-batch dicts that would have been saved (keys: ``pert_out``,
+        ``r_s_root``, ``ImpactFrameParams``).
     N_batch : int, optional
         Number of subhalos to process in each batch (default is 500).
     atol : float, optional
@@ -87,6 +94,12 @@ def get_derivs(
         Number of time samples for stream arm generation (default is 5000).
     save_iter_start : int, optional
         Starting index for saving output files (default is 0).
+    self_grav : bool, optional
+        If True (default), the progenitor feels its own self-gravity via a
+        ``PlummerPotential(m=Msat, r_s=r_s)`` translating with the progenitor orbit -- both when
+        generating the base stream and when building the base model. If False, the progenitor is
+        treated as massless (no Plummer term), so the base stream and derivatives are integrated
+        in ``pot`` alone. Use False to match a notebook/stream built without progenitor self-gravity.
 
     Returns
     -------
@@ -101,10 +114,18 @@ def get_derivs(
     """
 
     print('backend –– ' + str(jax.devices()[0]))
-    
+
+    if save and path is None:
+        raise ValueError("path must be provided when save=True")
+    results = [] if not save else None
+
     IC = pot.integrate_orbit(w0=prog_wtoday, t0=0.0, t1=-t_age, ts=jnp.array([-t_age])).ys[0]
     ts = jnp.hstack([jnp.linspace(-t_age, t_dissolve, N_arm), jnp.array([0.0])])
-    
+
+    # Progenitor self-gravity: a massive Plummer (self_grav=True) or a massless one (self_grav=False,
+    # i.e. no self-gravity -> base stream and derivatives integrate in `pot` alone).
+    prog_pot = potential.PlummerPotential(m=Msat if self_grav else 0.0, r_s=r_s, units=usys)
+
     print('generating base stream')
     l, t = ssc.gen_stream_vmapped_Chen25(pot_base=pot,
                                          prog_w0=IC,
@@ -114,7 +135,7 @@ def get_derivs(
                                          atol=1e-7,
                                          rtol=1e-7,
                                          solver=diffrax.Dopri8(),
-                                         prog_pot=potential.PlummerPotential(m=Msat, r_s=r_s, units=usys))
+                                         prog_pot=prog_pot)
 
     stream = jnp.vstack([l, t])
     phi1_model = phi1_function(stream)
@@ -135,7 +156,7 @@ def get_derivs(
                             Msat=Msat,
                             key=jax.random.PRNGKey(stream_seednum),
                             units=usys,
-                            prog_pot=potential.PlummerPotential(m=Msat, r_s=r_s, units=usys),
+                            prog_pot=prog_pot,
                             rtol=1e-7,
                             atol=1e-7,
                             solver=diffrax.Dopri8())
@@ -160,7 +181,7 @@ def get_derivs(
                                 tImpactBounds=[-t_age, 0.],
                                 phi1window=phi1window,
                                 NumImpacts=len(mass_samps),
-                                bImpact_bounds=jnp.column_select([jnp.zeros_like(mass_samps), 1.05 * jnp.sqrt(mass_samps / 1e8) * bmax_fac]) if jnp.isscalar(bmax_fac) else [0, 1.05 * jnp.sqrt(mass_samps / 1e8) * bmax_fac],
+                                bImpact_bounds=[jnp.zeros_like(mass_samps), 1.05 * jnp.sqrt(mass_samps / 1e8) * bmax_fac],
                                 stripping_times=jnp.hstack([ts[:-1], ts[:-1]]),
                                 phi1_exclude=phi1_exclude,
                                 prog_today=prog_wtoday,
@@ -195,10 +216,13 @@ def get_derivs(
         dict_save = dict(pert_out=pert_out,
                         r_s_root=sub_pot.r_s,
                         ImpactFrameParams=ImpactDict['ImpactFrameParams'])
-                        
-        jnp.save(f"{path}/{i + save_iter_start}.npy", dict_save)
 
-        # Clean up memory
+        if save:
+            jnp.save(f"{path}/{i + save_iter_start}.npy", dict_save)
+        else:
+            results.append(dict_save)  # list keeps the references alive past the del below
+
+        # Clean up memory (names only; the returned list still references dict_save/pert_out)
         del mass_samps, rs_samps, ImpactGen, ImpactDict, sub_pot, pertgen, pert_out, dict_save
-    
-    return None
+
+    return results

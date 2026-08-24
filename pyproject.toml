@@ -14,7 +14,7 @@ authors = [{ name = "Jacob Nibauer" }]
 dependencies = [
   "astropy>=6",
   "diffrax>=0.6",
-  "equinox>=0.11",
+  "equinox>=0.11,<0.12",
   "interpax>=0.3",
   "jaxopt>=0.8",
   "numpy>=1.26",

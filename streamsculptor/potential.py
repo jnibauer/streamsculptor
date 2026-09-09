@@ -314,6 +314,67 @@ class DehnenBarPotential(Potential):
         prefacs = self.alpha * ((self.v0**2) / 3) * ((self.R0 / self.Rb)**3)
         return prefacs * ((R**2 / r**2)) * U_eval * jnp.cos(2 * (phi - self.phib - self.Omega * t))
 
+class CoxGomezSpiralPotential(Potential):
+    """
+    Logarithmic spiral-arm potential of Cox & Gomez (2002), ApJS 142, 261
+    (astro-ph/0207635), Eq. 8.
+
+    Parameters
+    ----------
+    N : number of spiral arms
+    alpha : pitch angle [radians]
+    r_s : radial scale length of the arm density dropoff
+    r_o : fiducial radius
+    rho_o : midplane arm density at r_o
+    H : scale height of the arm density perturbation
+    phi_o : phase angle of the spiral at r_o (phi_p(r_o) in the paper)
+    Omega : pattern speed; the spiral phase is advanced by Omega * t
+    Cn : amplitudes of the harmonic terms n=1,2,... in the sum of Eq. 4/8.
+         Free choice (not fixed by the paper); default (8/3pi, 1/2, 8/15pi)
+         is the paper's "concentrated arms" example with three harmonics.
+    """
+    N: int = eqx.field(static=True)
+    alpha: float
+    r_s: float
+    r_o: float
+    rho_o: float
+    H: float
+    phi_o: float
+    Omega: float
+    Cn: tuple = eqx.field(static=True)
+
+    def __init__(self, N, alpha, r_s, r_o, rho_o, H, phi_o=0.0, Omega=0.0,
+                 Cn=(8.0 / (3.0 * jnp.pi), 0.5, 8.0 / (15.0 * jnp.pi)), units=usys):
+        super().__init__(units)
+        self.N = N
+        self.alpha = alpha
+        self.r_s = r_s
+        self.r_o = r_o
+        self.rho_o = rho_o
+        self.H = H
+        self.phi_o = phi_o
+        self.Omega = Omega
+        self.Cn = tuple(Cn)
+
+    def potential(self, xyz, t):
+        R = jnp.sqrt(xyz[0]**2 + xyz[1]**2)
+        z = xyz[2]
+        phi = jnp.arctan2(xyz[1], xyz[0])
+
+        gamma = self.N * (phi - self.phi_o - self.Omega * t - jnp.log(R / self.r_o) / jnp.tan(self.alpha))
+
+        prefac = -4.0 * jnp.pi * self.units.G * self.H * self.rho_o * jnp.exp(-(R - self.r_o) / self.r_s)
+
+        Phi = 0.0
+        for n, C_n in enumerate(self.Cn, start=1):
+            K_n = n * self.N / (R * jnp.sin(self.alpha))
+            K_n_H = K_n * self.H
+            beta_n = K_n_H * (1.0 + 0.4 * K_n_H)
+            D_n = (1.0 + K_n_H + 0.3 * K_n_H**2) / (1.0 + 0.3 * K_n_H)
+            Phi = Phi + (C_n / (K_n * D_n)) * jnp.cos(n * gamma) * (1.0 / jnp.cosh(K_n * z / beta_n))**beta_n
+
+        return prefac * Phi
+
 class MN3ExponentialDiskPotential(Potential):
     m: float
     h_R: float

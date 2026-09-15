@@ -10,7 +10,7 @@ Implements:
     AnalyticTNFWSubhaloLinePotential — N subhalos on straight-line trajectories
 
 Tidal-track helpers (_nfw_params_from_infall, _tidally_evolved_nfw_params) are
-identical to those in tnfw.py.
+imported from tidal_track.py, the same ones tnfw.py uses.
 """
 
 import jax
@@ -19,38 +19,9 @@ import equinox as eqx
 
 from streamsculptor.main import Potential, usys
 from streamsculptor.potential import tNFWPotential
+from streamsculptor.tidal_track import _nfw_params_from_infall, _tidally_evolved_nfw_params
 
 jax.config.update("jax_enable_x64", True)
-
-
-# =============================================================================
-# Tidal track helpers (Du+2024, NFW alpha=1 beta=3 gamma=1 delta=2)
-# =============================================================================
-
-def _nfw_params_from_infall(m_infall, c_infall, z_infall,
-                             H0=67.4, Omega_m=0.315, Omega_L=0.685):
-    """Compute rhos, rs, R200 from infall properties (Planck 2018 cosmology by default)."""
-    G = 4.498e-12  # kpc^3 / (Msun * Myr^2)
-    H0_myr = H0 * 1e3 / 3.0856e22 * 3.15576e13
-    Ez = jnp.sqrt(Omega_m * (1 + z_infall)**3 + Omega_L)
-    rho_crit = 3 * (H0_myr * Ez)**2 / (8 * jnp.pi * G)
-    R200 = (3 * m_infall / (4 * jnp.pi * 200 * rho_crit))**(1.0 / 3.0)
-    rs = R200 / c_infall
-    rhos = m_infall / (4 * jnp.pi * rs**3 * (jnp.log(1 + c_infall) - c_infall / (1 + c_infall)))
-    return rhos, rs, R200
-
-
-def _tidally_evolved_nfw_params(m_infall, c_infall, z_infall, f_bound):
-    """
-    Du+2024 tidal track parameters for a TNFW given infall properties and
-    bound mass fraction. Returns rhos, rs, ft, rt.
-    """
-    rhos, rs, r200 = _nfw_params_from_infall(m_infall, c_infall, z_infall)
-    A, B, C = 0.68492777, 0.66438857, 2.07766512
-    D, E    = 0.75826635, 0.23376409
-    ft = jnp.minimum((1 + D) * f_bound**E / (1 + D * f_bound**(2 * E)), 1.0)
-    rt = (1 + A) * f_bound**B / (1 + A * f_bound**(2 * B)) / jnp.exp(C * (1 - f_bound)) * r200
-    return rhos, rs, ft, rt
 
 
 # =============================================================================

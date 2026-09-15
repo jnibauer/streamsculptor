@@ -1,5 +1,5 @@
 """
-Tests for TNFWSubhaloLinePotential (tnfw_new.py).
+Tests for TNFWSubhaloLinePotential (tnfw_analytic.py).
 
 Verifies that the precomputed-coefficient implementation agrees with the
 reference tNFWPotential (potential.py) to floating-point precision.
@@ -16,7 +16,7 @@ import pytest
 jax.config.update("jax_enable_x64", True)
 
 from streamsculptor.potential import tNFWPotential
-from streamsculptor.tnfw_new import TNFWSubhaloLinePotential
+from streamsculptor.tnfw_analytic import TNFWSubhaloLinePotential
 from streamsculptor.main import usys
 
 
@@ -192,7 +192,7 @@ class TestFromInfall:
     """
 
     def test_from_infall_matches_reference(self):
-        from streamsculptor.tnfw_new import _tidally_evolved_nfw_params
+        from streamsculptor.tnfw_analytic import _tidally_evolved_nfw_params
 
         m_infall = jnp.array([1e8, 5e7])
         c_infall = jnp.array([15.0, 10.0])

@@ -406,7 +406,7 @@ class SubhaloPopulation:
         dict of np.ndarray with the drawn halos' infall properties, bound masses,
         weights and TNFW parameters, plus ``idx`` into the population.
         """
-        from streamsculptor.tnfw import _tidally_evolved_nfw_params
+        from streamsculptor.tidal_track import _tidally_evolved_nfw_params
 
         n = int(n)
         w = np.asarray(self.weights, dtype=float)
@@ -968,7 +968,7 @@ class ImpactRates:
             ``key -> dict`` of arrays of length ``max_num_impacts``, plus scalar
             ``n_impacts`` and ``rate``.
         """
-        from streamsculptor.tnfw import _tidally_evolved_nfw_params
+        from streamsculptor.tidal_track import _tidally_evolved_nfw_params
 
         max_num_impacts = int(max_num_impacts)
         rate = float(self.expected_impacts() if rate is None else rate)

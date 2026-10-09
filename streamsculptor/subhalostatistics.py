@@ -212,13 +212,13 @@ class RateCalculator(eqx.Module):
         """
         dn_dlog10M_val = self.dn_dlog10M(log10M=log10M, r=self.orbital_r, slope=slope, gamma=gamma, beta=beta, M_hm=M_hm)
         b_max = b_max_func(log10M)
-        
-        length_osc_ts = self.length_osc['ts'] # this goes from e.g. -3000 Myr to 0
-        length_osc_flip = jnp.flip(jnp.abs(length_osc_ts)) # this goes from 0 to 3000 Myr, and is the same length as legnth_osc_ts
-        # interpolate this over the orbit times to get length as a function of time
+
         if linear_growth:
              l_of_t = self.l_obs * (self.orbit_ts / self.t_age)
         else:
+            length_osc_ts = self.length_osc['ts'] # this goes from e.g. -3000 Myr to 0
+            length_osc_flip = jnp.flip(jnp.abs(length_osc_ts)) # this goes from 0 to 3000 Myr, and is the same length as legnth_osc_ts
+            # interpolate this over the orbit times to get length as a function of time
             l_of_t = jnp.interp(self.orbit_ts, length_osc_flip, self.length_osc['length_func']) # same length as self.orbit_ts
         integrand = l_of_t * dn_dlog10M_val
         prefac = jnp.sqrt(2 * jnp.pi) * self.sigma * self.disk_factor * b_max 

@@ -18,7 +18,7 @@ Based on Nibauer et al. 2025: https://arxiv.org/abs/2410.21174 (see below for bi
     - For CPU usage: `pip install "jax==0.4.38"`
     - For GPU usage: streamsculptor sucessfully runs on cudatoolkit 12.0 with the Jax install `pip install --upgrade "jax[cuda12]==0.4.38"`
 - Now install streamsculptor: `pip install .`
-- For editable/development mode: `pip install -e .`
+- For editable mode: `pip install -e .`
 
 
 ### Note
